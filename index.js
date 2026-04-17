@@ -7,9 +7,12 @@ app.use(cors());
 app.use(express.json());
 
 // Connect to PostgreSQL database
+console.log('DATABASE_URL present:', !!process.env.DATABASE_URL);
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
+  connectionTimeoutMillis: 10000,
+  idleTimeoutMillis: 30000,
 });
 
 // ─── Create tables if they don't exist ───────────────────────────────────────
