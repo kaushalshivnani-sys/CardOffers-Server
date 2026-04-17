@@ -218,6 +218,12 @@ app.post('/seed', async (req, res) => {
 
 // ─── START SERVER ─────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
-initDB().then(() => {
-  app.listen(PORT, () => console.log(`CardOffers API running on port ${PORT}`));
-});
+initDB()
+  .then(() => {
+    app.listen(PORT, () => console.log(`CardOffers API running on port ${PORT}`));
+  })
+  .catch((err) => {
+    console.error('Database connection failed:', err.message);
+    console.log('Starting server without database...');
+    app.listen(PORT, () => console.log(`CardOffers API running on port ${PORT}`));
+  });
