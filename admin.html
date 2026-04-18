@@ -112,9 +112,11 @@
         <div id="extracted-offers-list"></div>
 
         <div style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-          <button class="btn btn-success" id="save-btn" onclick="saveExtractedOffers()">Save selected offers to database</button>
-          <span id="save-msg"></span>
-        </div>
+  <button class="btn btn-primary" id="extract-btn" onclick="extractOffers()">Extract offers with AI</button>
+  <button class="btn" style="background:#f0f0f0;color:#333" onclick="trimText()">Clean up text first</button>
+  <span id="extract-msg"></span>
+</div>
+<div id="trim-msg" style="font-size:12px;color:#0F6E56;margin-top:6px"></div>
       </div>
     </div>
   </div>
@@ -229,6 +231,23 @@
 <script>
 const SERVER = 'https://cardoffers-server.onrender.com';
 let extractedOffers = [];
+function trimText() {
+  const textarea = document.getElementById('extract-text');
+  let text = textarea.value;
+
+  // Remove HTML tags
+  text = text.replace(/<[^>]*>/g, ' ');
+  // Remove extra whitespace
+  text = text.replace(/\s+/g, ' ').trim();
+  // Keep only first 15000 characters to stay within token limit
+  if (text.length > 15000) {
+    text = text.substring(0, 15000);
+  }
+
+  textarea.value = text;
+  document.getElementById('trim-msg').textContent =
+    'Text trimmed to ' + text.length + ' characters. Ready to extract.';
+}
 
 async function checkServer() {
   try {

@@ -214,6 +214,8 @@ app.post('/extract-offers', async (req, res) => {
       max_tokens: 2000,
       messages: [{
         role: 'user',
+        // Trim text to avoid token limit
+const trimmedText = text.length > 12000 ? text.substring(0, 12000) : text;
         content: `You are a helpful assistant that extracts credit card offers from bank website text.
 
 Extract all credit card offers from the following text from ${bank} bank website.
@@ -238,7 +240,7 @@ If validity date is not mentioned, use "30 Jun 2026".
 If card variant is not mentioned, use "All".
 
 Here is the bank website text:
-${text}
+${trimmedText}
 
 Return only the JSON array, nothing else.`
       }]
