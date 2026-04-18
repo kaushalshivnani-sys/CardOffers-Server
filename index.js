@@ -75,6 +75,7 @@ async function initDB() {
 
 app.get('/', (req, res) => {
   res.json({ status: 'CardOffers API is running!' });
+  app.use(express.static('.'));
 });
 
 app.get('/offers', async (req, res) => {

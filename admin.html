@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CardOffers Admin Panel</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, sans-serif; background: #f5f5f5; color: #111; }
+  .header { background: #185FA5; color: #fff; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+  .header h1 { font-size: 20px; font-weight: 600; }
+  .header span { font-size: 13px; opacity: 0.8; }
+  .container { max-width: 900px; margin: 0 auto; padding: 24px 16px; }
+  .tabs { display: flex; gap: 4px; background: #e0e0e0; border-radius: 8px; padding: 4px; margin-bottom: 24px; }
+  .tab { flex: 1; padding: 9px; border: none; background: transparent; border-radius: 6px; font-size: 13px; color: #555; cursor: pointer; font-family: Arial; transition: all .15s; }
+  .tab.active { background: #fff; color: #185FA5; font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .card { background: #fff; border-radius: 12px; padding: 20px; margin-bottom: 16px; border: 1px solid #e0e0e0; }
+  .card h2 { font-size: 16px; font-weight: 600; color: #111; margin-bottom: 4px; }
+  .card p { font-size: 13px; color: #666; margin-bottom: 16px; line-height: 1.5; }
+  label { display: block; font-size: 12px; font-weight: 600; color: #555; margin-bottom: 5px; margin-top: 12px; }
+  select, input, textarea { width: 100%; padding: 9px 12px; border: 1px solid #ccc; border-radius: 7px; font-size: 13px; font-family: Arial; background: #fafafa; }
+  textarea { resize: vertical; min-height: 120px; }
+  select:focus, input:focus, textarea:focus { outline: none; border-color: #185FA5; }
+  .btn { padding: 10px 20px; border: none; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: Arial; transition: all .15s; }
+  .btn-primary { background: #185FA5; color: #fff; }
+  .btn-primary:hover { background: #0C447C; }
+  .btn-success { background: #0F6E56; color: #fff; }
+  .btn-success:hover { background: #085041; }
+  .btn-danger { background: transparent; border: 1px solid #f09595; color: #a32d2d; }
+  .btn-danger:hover { background: #fff0f0; }
+  .btn-sm { padding: 5px 12px; font-size: 11px; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  .msg { font-size: 13px; padding: 10px 14px; border-radius: 7px; margin-top: 12px; }
+  .msg.success { background: #E1F5EE; color: #085041; border: 1px solid #5DCAA5; }
+  .msg.error { background: #FCEBEB; color: #A32D2D; border: 1px solid #F09595; }
+  .msg.info { background: #E6F1FB; color: #0C447C; border: 1px solid #85B7EB; }
+  .offer-preview { background: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 8px; padding: 12px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .offer-preview.selected { border-color: #1D9E75; background: #f0faf5; }
+  .offer-info { flex: 1; }
+  .offer-title { font-size: 13px; font-weight: 600; color: #111; margin-bottom: 3px; }
+  .offer-meta { font-size: 11px; color: #666; }
+  .offer-value { font-size: 18px; font-weight: 700; color: #1D9E75; text-align: right; white-space: nowrap; }
+  .badge { font-size: 10px; padding: 2px 7px; border-radius: 4px; font-weight: 600; display: inline-block; margin-right: 4px; }
+  .b-bank { background: #E6F1FB; color: #185FA5; }
+  .b-plat { background: #EEEDFE; color: #3C3489; }
+  .sub-card { background: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 8px; padding: 12px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .sub-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; animation: spin .6s linear infinite; vertical-align: middle; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px; }
+  .stat { background: #fff; border-radius: 10px; padding: 14px; border: 1px solid #e0e0e0; text-align: center; }
+  .stat-num { font-size: 28px; font-weight: 700; color: #185FA5; }
+  .stat-lbl { font-size: 11px; color: #888; margin-top: 4px; }
+  .offer-list-item { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 12px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .empty { text-align: center; padding: 40px; color: #888; font-size: 14px; }
+  #select-all-wrap { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 13px; color: #555; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>CardOffers Admin Panel</h1>
+  <span id="server-status">Connecting...</span>
+</div>
+
+<div class="container">
+
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('extract')">AI Extract</button>
+    <button class="tab" onclick="showTab('submissions')">Community Submissions</button>
+    <button class="tab" onclick="showTab('offers')">All Offers</button>
+    <button class="tab" onclick="showTab('add')">Add Manually</button>
+  </div>
+
+  <!-- AI EXTRACT TAB -->
+  <div class="panel active" id="panel-extract">
+    <div class="card">
+      <h2>AI Offer Extraction</h2>
+      <p>Visit any bank's offer page, select all the text on the page (Ctrl+A then Ctrl+C), paste it below, select the bank, and click Extract. Claude AI will automatically identify all relevant offers.</p>
+
+      <label>Bank name</label>
+      <select id="extract-bank">
+        <option value="">— Select bank —</option>
+        <option>HDFC</option><option>Axis</option><option>SBI</option><option>ICICI</option>
+        <option>Kotak</option><option>IDFC</option><option>Amex</option><option>Citi</option>
+      </select>
+
+      <label>Paste bank offer page text here</label>
+      <textarea id="extract-text" placeholder="Go to your bank's website offer page, press Ctrl+A to select all text, Ctrl+C to copy, then paste here with Ctrl+V..."></textarea>
+
+      <div style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-primary" id="extract-btn" onclick="extractOffers()">Extract offers with AI</button>
+        <span id="extract-msg"></span>
+      </div>
+    </div>
+
+    <div id="extract-results" style="display:none">
+      <div class="card">
+        <h2 id="extract-count-title">Extracted offers</h2>
+        <p>Review the offers below. Uncheck any that look incorrect, then click Save to add them to your database.</p>
+
+        <div id="select-all-wrap">
+          <input type="checkbox" id="select-all" checked onchange="toggleAll(this.checked)" style="width:auto">
+          <label for="select-all" style="margin:0;font-weight:400">Select all</label>
+          <span id="selected-count" style="margin-left:auto;color:#185FA5;font-weight:600"></span>
+        </div>
+
+        <div id="extracted-offers-list"></div>
+
+        <div style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-success" id="save-btn" onclick="saveExtractedOffers()">Save selected offers to database</button>
+          <span id="save-msg"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- COMMUNITY SUBMISSIONS TAB -->
+  <div class="panel" id="panel-submissions">
+    <div class="card">
+      <h2>Pending community submissions</h2>
+      <p>These are offers submitted by users. Review each one and approve or reject.</p>
+      <button class="btn btn-primary btn-sm" onclick="loadSubmissions()" style="margin-bottom:12px">Refresh</button>
+      <div id="submissions-list"><div class="empty">Loading...</div></div>
+    </div>
+  </div>
+
+  <!-- ALL OFFERS TAB -->
+  <div class="panel" id="panel-offers">
+    <div class="stats">
+      <div class="stat"><div class="stat-num" id="total-offers">—</div><div class="stat-lbl">Total offers</div></div>
+      <div class="stat"><div class="stat-num" id="total-banks">—</div><div class="stat-lbl">Banks covered</div></div>
+      <div class="stat"><div class="stat-num" id="total-platforms">—</div><div class="stat-lbl">Platforms covered</div></div>
+    </div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h2>All offers in database</h2>
+        <button class="btn btn-primary btn-sm" onclick="loadOffers()">Refresh</button>
+      </div>
+      <div id="offers-list"><div class="empty">Loading...</div></div>
+    </div>
+  </div>
+
+  <!-- ADD MANUALLY TAB -->
+  <div class="panel" id="panel-add">
+    <div class="card">
+      <h2>Add offer manually</h2>
+      <p>Use this to add a single offer you found yourself.</p>
+
+      <div class="row3">
+        <div>
+          <label>Bank</label>
+          <select id="m-bank">
+            <option value="">— Select —</option>
+            <option>HDFC</option><option>Axis</option><option>SBI</option><option>ICICI</option>
+            <option>Kotak</option><option>IDFC</option><option>Amex</option><option>Citi</option>
+          </select>
+        </div>
+        <div>
+          <label>Card type</label>
+          <select id="m-card">
+            <option value="">— Select —</option>
+            <option>Credit</option><option>Debit</option><option>Prepaid</option>
+          </select>
+        </div>
+        <div>
+          <label>Card variant</label>
+          <input type="text" id="m-variant" placeholder="e.g. Millennia or All">
+        </div>
+      </div>
+
+      <div class="row2">
+        <div>
+          <label>Platform</label>
+          <select id="m-platform">
+            <option value="">— Select —</option>
+            <option value="amazon">Amazon</option><option value="flipkart">Flipkart</option>
+            <option value="swiggy">Swiggy</option><option value="zomato">Zomato</option>
+            <option value="myntra">Myntra</option><option value="ajio">Ajio</option>
+            <option value="bigbasket">BigBasket</option><option value="blinkit">Blinkit</option>
+            <option value="nykaa">Nykaa</option><option value="makemytrip">MakeMyTrip</option>
+            <option value="irctc">IRCTC</option><option value="bookmyshow">BookMyShow</option>
+          </select>
+        </div>
+        <div>
+          <label>Offer value (e.g. 10% or 100 or 5x)</label>
+          <input type="text" id="m-value" placeholder="e.g. 10% or 100 or 5x">
+        </div>
+      </div>
+
+      <label>Offer title</label>
+      <input type="text" id="m-title" placeholder="e.g. 10% cashback on Amazon">
+
+      <label>Description</label>
+      <input type="text" id="m-desc" placeholder="Short description of the offer">
+
+      <div class="row3">
+        <div>
+          <label>Type</label>
+          <select id="m-type">
+            <option value="cashback">Cashback</option>
+            <option value="flat">Flat discount</option>
+            <option value="points">Reward points</option>
+          </select>
+        </div>
+        <div>
+          <label>Cap (e.g. Max 500)</label>
+          <input type="text" id="m-cap" placeholder="e.g. Max 500">
+        </div>
+        <div>
+          <label>Valid till (e.g. 30 Jun 2026)</label>
+          <input type="text" id="m-validity" placeholder="30 Jun 2026">
+        </div>
+      </div>
+
+      <div style="margin-top:16px;display:flex;gap:10px;align-items:center">
+        <button class="btn btn-primary" onclick="addManually()">Save offer</button>
+        <span id="manual-msg"></span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const SERVER = 'https://cardoffers-server.onrender.com';
+let extractedOffers = [];
+
+async function checkServer() {
+  try {
+    const r = await fetch(SERVER + '/');
+    const d = await r.json();
+    document.getElementById('server-status').textContent = d.status ? 'Server connected' : 'Server error';
+  } catch(e) {
+    document.getElementById('server-status').textContent = 'Server offline';
+  }
+}
+
+function showTab(name) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+  event.target.classList.add('active');
+  if (name === 'submissions') loadSubmissions();
+  if (name === 'offers') loadOffers();
+}
+
+async function extractOffers() {
+  const bank = document.getElementById('extract-bank').value;
+  const text = document.getElementById('extract-text').value.trim();
+  const btn = document.getElementById('extract-btn');
+  const msg = document.getElementById('extract-msg');
+
+  if (!bank) { msg.innerHTML = '<span style="color:#a32d2d">Please select a bank first.</span>'; return; }
+  if (!text) { msg.innerHTML = '<span style="color:#a32d2d">Please paste some text first.</span>'; return; }
+  if (text.length < 50) { msg.innerHTML = '<span style="color:#a32d2d">Text is too short. Please paste more content from the bank page.</span>'; return; }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Extracting with AI...';
+  msg.innerHTML = '';
+
+  try {
+    const response = await fetch(SERVER + '/extract-offers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, bank })
+    });
+    const data = await response.json();
+
+    if (!data.success) {
+      msg.innerHTML = '<span style="color:#a32d2d">Error: ' + (data.error || 'Something went wrong') + '</span>';
+      return;
+    }
+
+    extractedOffers = data.offers;
+    renderExtractedOffers();
+    document.getElementById('extract-results').style.display = 'block';
+    document.getElementById('extract-count-title').textContent = data.count + ' offers extracted';
+    msg.innerHTML = '<span style="color:#0F6E56">Found ' + data.count + ' offers! Review below.</span>';
+
+  } catch(e) {
+    msg.innerHTML = '<span style="color:#a32d2d">Network error. Is the server running?</span>';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = 'Extract offers with AI';
+  }
+}
+
+function renderExtractedOffers() {
+  const list = document.getElementById('extracted-offers-list');
+  const platIcons = { amazon:'🛒',flipkart:'📦',swiggy:'🍔',zomato:'🍕',myntra:'👗',ajio:'👟',bigbasket:'🥦',blinkit:'⚡',nykaa:'💄',makemytrip:'✈️',irctc:'🚂',bookmyshow:'🎬' };
+
+  list.innerHTML = extractedOffers.map((o, i) => `
+    <div class="offer-preview ${true ? 'selected' : ''}" id="offer-wrap-${i}">
+      <input type="checkbox" id="offer-check-${i}" checked onchange="updateSelectedCount()" style="width:auto;flex-shrink:0;margin-top:3px">
+      <div class="offer-info">
+        <div class="offer-title">${o.title}</div>
+        <div class="offer-meta">
+          <span class="badge b-bank">${o.bank}</span>
+          <span class="badge b-plat">${platIcons[o.platform] || ''} ${o.platform}</span>
+          ${o.variant} · ${o.card} · Cap: ${o.cap} · Valid till ${o.validity}
+        </div>
+        <div class="offer-meta" style="margin-top:3px;color:#555">${o.description}</div>
+      </div>
+      <div class="offer-value">${o.value}</div>
+    </div>
+  `).join('');
+
+  updateSelectedCount();
+}
+
+function toggleAll(checked) {
+  extractedOffers.forEach((_, i) => {
+    document.getElementById('offer-check-' + i).checked = checked;
+  });
+  updateSelectedCount();
+}
+
+function updateSelectedCount() {
+  const total = extractedOffers.length;
+  const selected = extractedOffers.filter((_, i) => document.getElementById('offer-check-' + i)?.checked).length;
+  document.getElementById('selected-count').textContent = selected + ' of ' + total + ' selected';
+}
+
+async function saveExtractedOffers() {
+  const toSave = extractedOffers.filter((_, i) => document.getElementById('offer-check-' + i)?.checked);
+  if (!toSave.length) { document.getElementById('save-msg').innerHTML = '<span style="color:#a32d2d">No offers selected.</span>'; return; }
+
+  const btn = document.getElementById('save-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Saving...';
+
+  try {
+    const response = await fetch(SERVER + '/offers/bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ offers: toSave })
+    });
+    const data = await response.json();
+    if (data.success) {
+      document.getElementById('save-msg').innerHTML = '<span style="color:#0F6E56">Saved ' + data.saved + ' offers to database!</span>';
+      document.getElementById('extract-text').value = '';
+      document.getElementById('extract-results').style.display = 'none';
+      extractedOffers = [];
+    } else {
+      document.getElementById('save-msg').innerHTML = '<span style="color:#a32d2d">Error: ' + data.error + '</span>';
+    }
+  } catch(e) {
+    document.getElementById('save-msg').innerHTML = '<span style="color:#a32d2d">Network error.</span>';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = 'Save selected offers to database';
+  }
+}
+
+async function loadSubmissions() {
+  const list = document.getElementById('submissions-list');
+  list.innerHTML = '<div class="empty">Loading...</div>';
+  try {
+    const r = await fetch(SERVER + '/submissions');
+    const data = await r.json();
+    if (!data.length) { list.innerHTML = '<div class="empty">No pending submissions.</div>'; return; }
+    list.innerHTML = data.map(s => `
+      <div class="sub-card">
+        <div class="offer-info">
+          <div class="offer-title">${s.title}</div>
+          <div class="offer-meta">${s.bank} · ${s.variant} · ${s.card} · ${s.platform} · ${s.value} · Till ${s.validity}</div>
+          <div class="offer-meta" style="margin-top:3px">Submitted by: ${s.submitted_by} · ${new Date(s.created_at).toLocaleDateString('en-IN')}</div>
+        </div>
+        <div class="sub-actions">
+          <button class="btn btn-success btn-sm" onclick="approveSubmission(${s.id}, this)">Approve</button>
+          <button class="btn btn-danger btn-sm" onclick="rejectSubmission(${s.id}, this)">Reject</button>
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {
+    list.innerHTML = '<div class="empty">Error loading submissions.</div>';
+  }
+}
+
+async function approveSubmission(id, btn) {
+  btn.disabled = true; btn.textContent = '...';
+  try {
+    await fetch(SERVER + '/submissions/' + id + '/approve', { method: 'POST' });
+    loadSubmissions();
+  } catch(e) { btn.disabled = false; btn.textContent = 'Approve'; }
+}
+
+async function rejectSubmission(id, btn) {
+  btn.disabled = true; btn.textContent = '...';
+  try {
+    await fetch(SERVER + '/submissions/' + id + '/reject', { method: 'POST' });
+    loadSubmissions();
+  } catch(e) { btn.disabled = false; btn.textContent = 'Reject'; }
+}
+
+async function loadOffers() {
+  const list = document.getElementById('offers-list');
+  list.innerHTML = '<div class="empty">Loading...</div>';
+  try {
+    const r = await fetch(SERVER + '/offers');
+    const data = await r.json();
+    document.getElementById('total-offers').textContent = data.length;
+    document.getElementById('total-banks').textContent = new Set(data.map(o => o.bank)).size;
+    document.getElementById('total-platforms').textContent = new Set(data.map(o => o.platform)).size;
+    if (!data.length) { list.innerHTML = '<div class="empty">No offers in database.</div>'; return; }
+    list.innerHTML = data.map(o => `
+      <div class="offer-list-item">
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:600;color:#111">${o.title}</div>
+          <div style="font-size:11px;color:#666;margin-top:2px">${o.bank} · ${o.variant} · ${o.card} · ${o.platform} · Till ${o.validity}</div>
+        </div>
+        <div style="font-size:16px;font-weight:700;color:#1D9E75;margin:0 12px">${o.value}</div>
+        <button class="btn btn-danger btn-sm" onclick="deleteOffer('${o.id}', this)">Delete</button>
+      </div>
+    `).join('');
+  } catch(e) {
+    list.innerHTML = '<div class="empty">Error loading offers.</div>';
+  }
+}
+
+async function deleteOffer(id, btn) {
+  if (!confirm('Delete this offer?')) return;
+  btn.disabled = true;
+  try {
+    await fetch(SERVER + '/offers/' + id, { method: 'DELETE' });
+    loadOffers();
+  } catch(e) { btn.disabled = false; }
+}
+
+async function addManually() {
+  const bank = document.getElementById('m-bank').value;
+  const card = document.getElementById('m-card').value;
+  const variant = document.getElementById('m-variant').value.trim();
+  const platform = document.getElementById('m-platform').value;
+  const value = document.getElementById('m-value').value.trim();
+  const title = document.getElementById('m-title').value.trim();
+  const desc = document.getElementById('m-desc').value.trim();
+  const type = document.getElementById('m-type').value;
+  const cap = document.getElementById('m-cap').value.trim();
+  const validity = document.getElementById('m-validity').value.trim();
+  const msg = document.getElementById('manual-msg');
+
+  if (!bank || !card || !platform || !value || !title) {
+    msg.innerHTML = '<span style="color:#a32d2d">Please fill all required fields.</span>';
+    return;
+  }
+
+  try {
+    const id = 'manual_' + bank.toLowerCase() + '_' + Date.now();
+    const r = await fetch(SERVER + '/offers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, bank, card, variant: variant || 'All', platform, value, type, title, description: desc, cap: cap || 'No cap', validity: validity || '30 Jun 2026', best: false })
+    });
+    const data = await r.json();
+    if (data.success) {
+      msg.innerHTML = '<span style="color:#0F6E56">Offer saved successfully!</span>';
+      ['m-bank','m-card','m-platform','m-type'].forEach(id => document.getElementById(id).value = '');
+      ['m-variant','m-value','m-title','m-desc','m-cap','m-validity'].forEach(id => document.getElementById(id).value = '');
+    } else {
+      msg.innerHTML = '<span style="color:#a32d2d">Error: ' + data.error + '</span>';
+    }
+  } catch(e) {
+    msg.innerHTML = '<span style="color:#a32d2d">Network error.</span>';
+  }
+}
+
+checkServer();
+</script>
+</body>
+</html>
