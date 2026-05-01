@@ -158,6 +158,7 @@
   <div style="display:flex;gap:8px">
     <button class="btn btn-gray btn-sm" onclick="loadOffers()">Refresh</button>
     <button class="btn btn-danger btn-sm" onclick="deduplicateOffers()">Remove duplicates</button>
+    <button class="btn btn-danger btn-sm" onclick="removeExpired()">Remove expired</button>
   </div>
 </div>
       <div id="offers-list"><div class="empty">Loading...</div></div>
@@ -509,6 +510,21 @@ async function deduplicateOffers() {
     alert('Error removing duplicates.');
   }
 }
+
+async function removeExpired() {
+  if (!confirm('This will permanently delete all expired offers from the database. Continue?')) return;
+  try {
+    const r = await fetch(SERVER + '/offers/expired', { method: 'DELETE' });
+    const data = await r.json();
+    if (data.success) {
+      alert('Done! Removed ' + data.removed + ' expired offers.');
+      loadOffers();
+    }
+  } catch(e) {
+    alert('Error removing expired offers.');
+  }
+}
+
 async function deleteOffer(id, btn) {
   if (!confirm('Delete this offer?')) return;
   btn.disabled = true;

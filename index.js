@@ -286,6 +286,22 @@ Return only the JSON array, nothing else.`
   }
 });
 
+app.delete('/offers/expired', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      DELETE FROM offers
+      WHERE created_at < NOW()
+      AND (
+        validity LIKE '%Jan 2026%' OR
+        validity LIKE '%Feb 2026%' OR
+        validity LIKE '%Mar 2026%' OR
+        validity LIKE '%Apr 2026%'
+      )
+    `);
+    res.json({ success: true, removed: result.rowCount });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/offers/deduplicate', async (req, res) => {
   try {
     const result = await pool.query(`
