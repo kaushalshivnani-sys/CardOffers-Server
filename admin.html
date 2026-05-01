@@ -153,10 +153,13 @@
       <div class="stat"><div class="stat-num" id="total-platforms">—</div><div class="stat-lbl">Platforms covered</div></div>
     </div>
     <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-        <h2>All offers in database</h2>
-        <button class="btn btn-gray btn-sm" onclick="loadOffers()">Refresh</button>
-      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+  <h2>All offers in database</h2>
+  <div style="display:flex;gap:8px">
+    <button class="btn btn-gray btn-sm" onclick="loadOffers()">Refresh</button>
+    <button class="btn btn-danger btn-sm" onclick="deduplicateOffers()">Remove duplicates</button>
+  </div>
+</div>
       <div id="offers-list"><div class="empty">Loading...</div></div>
     </div>
   </div>
@@ -493,7 +496,19 @@ async function loadOffers() {
     list.innerHTML = '<div class="empty">Error loading offers.</div>';
   }
 }
-
+async function deduplicateOffers() {
+  if (!confirm('This will remove all duplicate offers keeping only the latest version of each. Continue?')) return;
+  try {
+    const r = await fetch(SERVER + '/offers/deduplicate', { method: 'POST' });
+    const data = await r.json();
+    if (data.success) {
+      alert('Done! Removed ' + data.removed + ' duplicate offers.');
+      loadOffers();
+    }
+  } catch(e) {
+    alert('Error removing duplicates.');
+  }
+}
 async function deleteOffer(id, btn) {
   if (!confirm('Delete this offer?')) return;
   btn.disabled = true;

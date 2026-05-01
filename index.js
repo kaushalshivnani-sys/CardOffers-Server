@@ -103,7 +103,18 @@ app.post('/offers/bulk', async (req, res) => {
   if (!offers || !Array.isArray(offers)) return res.status(400).json({ error: 'Please provide an array of offers.' });
   try {
     let saved = 0;
+    let skipped = 0;
     for (const o of offers) {
+      // Check if similar offer already exists
+      const existing = await pool.query(
+        `SELECT id FROM offers 
+         WHERE bank=$1 AND platform=$2 AND value=$3 AND card=$4`,
+        [o.bank, o.platform, o.value, o.card]
+      );
+      if (existing.rows.length > 0) {
+        skipped++;
+        continue;
+      }
       await pool.query(
         `INSERT INTO offers (id, bank, card, variant, platform, value, type, title, description, cap, validity, best)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
@@ -112,7 +123,7 @@ app.post('/offers/bulk', async (req, res) => {
       );
       saved++;
     }
-    res.json({ success: true, saved });
+    res.json({ success: true, saved, skipped });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -273,6 +284,20 @@ Return only the JSON array, nothing else.`
     console.error('AI extraction error:', error);
     res.status(500).json({ error: error.message });
   }
+});
+
+app.post('/offers/deduplicate', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      DELETE FROM offers
+      WHERE id NOT IN (
+        SELECT DISTINCT ON (bank, platform, value, card) id
+        FROM offers
+        ORDER BY bank, platform, value, card, created_at DESC
+      )
+    `);
+    res.json({ success: true, removed: result.rowCount });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/seed', async (req, res) => {
