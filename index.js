@@ -80,8 +80,30 @@ app.get('/', (req, res) => {
 
 app.get('/offers', async (req, res) => {
   try {
+    // Only return offers that have not yet expired
+    // validity is stored as "DD Mon YYYY" e.g. "30 Jun 2026"
+    // We parse it in JS and filter out anything where today > validity date
     const result = await pool.query('SELECT * FROM offers ORDER BY created_at DESC');
-    res.json(result.rows);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); // compare by date only, ignore time
+
+    const months = {
+      Jan:0, Feb:1, Mar:2, Apr:3, May:4, Jun:5,
+      Jul:6, Aug:7, Sep:8, Oct:9, Nov:10, Dec:11
+    };
+
+    const activeOffers = result.rows.filter(o => {
+      try {
+        const parts = (o.validity || '').trim().split(' ');
+        if (parts.length < 3) return true; // keep if date unparseable
+        const expiry = new Date(parseInt(parts[2]), months[parts[1]], parseInt(parts[0]));
+        return expiry >= today;
+      } catch (e) {
+        return true; // keep offer if parsing fails
+      }
+    });
+
+    res.json(activeOffers);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -288,19 +310,51 @@ Return only the JSON array, nothing else.`
 
 app.delete('/offers/expired', async (req, res) => {
   try {
-    const result = await pool.query(`
-      DELETE FROM offers
-      WHERE created_at < NOW()
-      AND (
-        validity LIKE '%Jan 2026%' OR
-        validity LIKE '%Feb 2026%' OR
-        validity LIKE '%Mar 2026%' OR
-        validity LIKE '%Apr 2026%'
-      )
-    `);
-    res.json({ success: true, removed: result.rowCount });
+    const deleted = await deleteExpiredOffers();
+    res.json({ success: true, removed: deleted });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// ─── Auto-delete expired offers daily ───────────────────────────────────────
+// Runs once at server startup, then every 24 hours automatically
+async function deleteExpiredOffers() {
+  const months = {
+    Jan:0, Feb:1, Mar:2, Apr:3, May:4, Jun:5,
+    Jul:6, Aug:7, Sep:8, Oct:9, Nov:10, Dec:11
+  };
+
+  // Fetch all offers and delete ones that are expired
+  const result = await pool.query('SELECT id, validity FROM offers');
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const expiredIds = result.rows
+    .filter(o => {
+      try {
+        const parts = (o.validity || '').trim().split(' ');
+        if (parts.length < 3) return false;
+        const expiry = new Date(parseInt(parts[2]), months[parts[1]], parseInt(parts[0]));
+        return expiry < today;
+      } catch (e) { return false; }
+    })
+    .map(o => o.id);
+
+  if (expiredIds.length === 0) {
+    console.log(`[Auto-cleanup] No expired offers found.`);
+    return 0;
+  }
+
+  await pool.query('DELETE FROM offers WHERE id = ANY($1)', [expiredIds]);
+  console.log(`[Auto-cleanup] Deleted ${expiredIds.length} expired offer(s).`);
+  return expiredIds.length;
+}
+
+// Run cleanup once at startup, then every 24 hours
+deleteExpiredOffers().catch(err => console.error('[Auto-cleanup] Startup run failed:', err.message));
+setInterval(() => {
+  deleteExpiredOffers().catch(err => console.error('[Auto-cleanup] Scheduled run failed:', err.message));
+}, 24 * 60 * 60 * 1000); // 24 hours in milliseconds
+// ─────────────────────────────────────────────────────────────────────────────
 
 app.post('/offers/deduplicate', async (req, res) => {
   try {
