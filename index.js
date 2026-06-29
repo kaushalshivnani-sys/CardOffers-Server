@@ -349,8 +349,7 @@ async function deleteExpiredOffers() {
   return expiredIds.length;
 }
 
-// Run cleanup once at startup, then every 24 hours
-deleteExpiredOffers().catch(err => console.error('[Auto-cleanup] Startup run failed:', err.message));
+// Auto-delete runs every 24 hours
 setInterval(() => {
   deleteExpiredOffers().catch(err => console.error('[Auto-cleanup] Scheduled run failed:', err.message));
 }, 24 * 60 * 60 * 1000); // 24 hours in milliseconds
@@ -370,7 +369,7 @@ app.post('/offers/deduplicate', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/seed', async (req, res) => {
+app.get('/seed', async (req, res) => {
   const defaultOffers = [
     { id:'o1',  bank:'HDFC',  card:'Credit', variant:'Millennia',          platform:'amazon',     value:'5%',   type:'cashback', title:'5% cashback on Amazon Pay',        description:'Earn 5% back on all purchases via Amazon Pay balance.', cap:'150 per txn',      validity:'30 Jun 2026', best:true  },
     { id:'o2',  bank:'HDFC',  card:'Credit', variant:'Regalia',             platform:'flipkart',   value:'10%',  type:'cashback', title:'10% instant discount on Flipkart', description:'Get 10% off on orders above 3000.',                     cap:'Max 1500',         validity:'30 Jun 2026', best:true  },
@@ -408,6 +407,8 @@ const PORT = process.env.PORT || 3000;
 initDB()
   .then(() => {
     app.listen(PORT, () => console.log(`CardOffers API running on port ${PORT}`));
+    // Run cleanup after DB is confirmed ready
+    deleteExpiredOffers().catch(err => console.error('[Auto-cleanup] Startup run failed:', err.message));
   })
   .catch((err) => {
     console.error('Database connection failed:', err.message);
