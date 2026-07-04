@@ -562,8 +562,6 @@ Return only the JSON array:`
 }
 
 // ─── Step 4: Manual /crawl endpoint for testing ───────────────────────────────
-// Hit this URL in your browser to trigger a crawl manually:
-// https://cardoffers-server.onrender.com/crawl
 app.get('/crawl', async (req, res) => {
   try {
     console.log('[Crawl] Manual crawl triggered via /crawl endpoint');
@@ -576,6 +574,71 @@ app.get('/crawl', async (req, res) => {
     console.error('[Crawl] Error:', e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// ─── Diagnostic endpoint — tests Perplexity key and one search ───────────────
+// Open in browser: https://cardoffers-server.onrender.com/crawl-test
+app.get('/crawl-test', async (req, res) => {
+  const results = {};
+
+  // Check 1 — are API keys present?
+  results.anthropic_key_present = !!process.env.ANTHROPIC_API_KEY;
+  results.perplexity_key_present = !!process.env.PERPLEXITY_API_KEY;
+
+  if (!process.env.PERPLEXITY_API_KEY) {
+    return res.json({ ...results, error: 'PERPLEXITY_API_KEY is missing from environment variables' });
+  }
+
+  // Check 2 — can we reach Perplexity API?
+  try {
+    const perplexityResponse = await fetch('https://api.perplexity.ai/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.PERPLEXITY_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'llama-3.1-sonar-small-128k-online',
+        messages: [
+          { role: 'system', content: 'You are a helpful assistant.' },
+          { role: 'user',   content: 'What is the current HDFC Millennia credit card cashback offer on Amazon India in 2026? Give specific percentage and cap.' }
+        ],
+        max_tokens: 500,
+        temperature: 0.1,
+      })
+    });
+
+    results.perplexity_http_status = perplexityResponse.status;
+
+    if (!perplexityResponse.ok) {
+      const errText = await perplexityResponse.text();
+      results.perplexity_error = errText.substring(0, 300);
+      return res.json(results);
+    }
+
+    const data = await perplexityResponse.json();
+    results.perplexity_response = data?.choices?.[0]?.message?.content || 'No content returned';
+    results.perplexity_success = true;
+
+  } catch (e) {
+    results.perplexity_fetch_error = e.message;
+  }
+
+  // Check 3 — can we reach Claude AI?
+  try {
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const msg = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 100,
+      messages: [{ role: 'user', content: 'Reply with just the word: working' }]
+    });
+    results.claude_response = msg.content[0].text;
+    results.claude_success = true;
+  } catch (e) {
+    results.claude_error = e.message;
+  }
+
+  res.json(results);
 });
 
 // ─── Bank sources management endpoints ───────────────────────────────────────
