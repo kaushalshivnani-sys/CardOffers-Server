@@ -70,7 +70,40 @@ async function initDB() {
       status TEXT DEFAULT 'pending',
       created_at TIMESTAMP DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS bank_sources (
+      id SERIAL PRIMARY KEY,
+      bank TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      url TEXT NOT NULL,
+      last_crawled TIMESTAMP,
+      active BOOLEAN DEFAULT true
+    );
   `);
+
+  // Seed default bank sources if table is empty
+  const sourceCount = await pool.query('SELECT COUNT(*) FROM bank_sources');
+  if (parseInt(sourceCount.rows[0].count) === 0) {
+    const defaultSources = [
+      { bank: 'HDFC',  platform: 'amazon',   url: 'https://www.hdfcbank.com/personal/pay/cards/credit-cards/credit-card-offers' },
+      { bank: 'HDFC',  platform: 'swiggy',   url: 'https://www.hdfcbank.com/personal/pay/cards/credit-cards/credit-card-offers' },
+      { bank: 'HDFC',  platform: 'flipkart', url: 'https://www.hdfcbank.com/personal/pay/cards/credit-cards/credit-card-offers' },
+      { bank: 'Axis',  platform: 'amazon',   url: 'https://www.axisbank.com/retail/offers' },
+      { bank: 'Axis',  platform: 'swiggy',   url: 'https://www.axisbank.com/retail/offers' },
+      { bank: 'ICICI', platform: 'amazon',   url: 'https://www.icicibank.com/offers' },
+      { bank: 'ICICI', platform: 'flipkart', url: 'https://www.icicibank.com/offers' },
+      { bank: 'SBI',   platform: 'amazon',   url: 'https://www.sbicard.com/en/personal/offers.page' },
+      { bank: 'Kotak', platform: 'amazon',   url: 'https://www.kotak.com/en/offers.html' },
+      { bank: 'IDFC',  platform: 'swiggy',   url: 'https://www.idfcfirstbank.com/offers' },
+    ];
+    for (const s of defaultSources) {
+      await pool.query(
+        'INSERT INTO bank_sources (bank, platform, url) VALUES ($1, $2, $3)',
+        [s.bank, s.platform, s.url]
+      );
+    }
+    console.log(`[Bank Sources] Seeded ${defaultSources.length} default sources.`);
+  }
+
   console.log('Database tables ready');
 }
 
@@ -308,6 +341,216 @@ Return only the JSON array, nothing else.`
   }
 });
 
+// ─── Step 3: Crawler function ────────────────────────────────────────────────
+async function crawlAndUpdateOffers() {
+  console.log('[Auto-update] Starting offer crawl...');
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+  let sources;
+  try {
+    const result = await pool.query('SELECT * FROM bank_sources WHERE active = true');
+    sources = result.rows;
+  } catch (e) {
+    console.error('[Auto-update] Could not fetch bank sources:', e.message);
+    return;
+  }
+
+  const platformList = [
+    'amazon','flipkart','swiggy','zomato','myntra','ajio','bigbasket',
+    'blinkit','nykaa','makemytrip','irctc','bookmyshow','meesho',
+    'tatacliq','jiomart','nykaafashion','eazydiner','zepto','dmartready',
+    'swiggyinstamart','goibibo','cleartrip','easemytrip','pvr','inox',
+    'hotstar','pharmeasy','netmeds','onemg','iocl','hpcl','phonepe'
+  ];
+
+  let totalSaved = 0;
+
+  for (const source of sources) {
+    try {
+      console.log(`[Auto-update] Crawling ${source.bank} / ${source.platform}...`);
+
+      // Fetch the bank offer page
+      const response = await fetch(source.url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-IN,en;q=0.9',
+        },
+        signal: AbortSignal.timeout(15000) // 15 second timeout
+      });
+
+      if (!response.ok) {
+        console.warn(`[Auto-update] ${source.bank}/${source.platform}: HTTP ${response.status} — skipping`);
+        continue;
+      }
+
+      const html = await response.text();
+
+      // Strip HTML tags and trim to save tokens
+      const cleanText = html
+        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .substring(0, 10000);
+
+      if (cleanText.length < 100) {
+        console.warn(`[Auto-update] ${source.bank}/${source.platform}: Page content too short — skipping`);
+        continue;
+      }
+
+      // Send to Claude AI for extraction
+      const aiResponse = await client.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 2000,
+        messages: [{
+          role: 'user',
+          content: `Extract all cashback and discount offers for ${source.bank} bank cards from this page text.
+Focus on offers for the platform: ${source.platform}.
+Return ONLY a valid JSON array, no explanation, no markdown.
+
+Each offer must have exactly these fields:
+- bank: "${source.bank}"
+- card: "Credit" or "Debit"
+- variant: specific card variant name, or "All" if applies to all cards
+- platform: "${source.platform}"
+- value: discount like "10%" or "500" or "5x"
+- type: "cashback" or "flat" or "points"
+- title: short offer title (max 60 chars)
+- description: brief description (max 120 chars)
+- cap: max discount cap like "Max 500" or "No cap"
+- validity: expiry date as "DD Mon YYYY" like "31 Dec 2026" — if not found use "31 Dec 2026"
+- best: true if exceptional deal, false otherwise
+
+If no offers found, return an empty array: []
+
+Page text:
+${cleanText}
+
+Return only the JSON array:`
+        }]
+      });
+
+      const responseText = aiResponse.content[0].text.trim();
+      const cleaned = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
+
+      let extractedOffers;
+      try {
+        extractedOffers = JSON.parse(cleaned);
+        if (!Array.isArray(extractedOffers)) extractedOffers = [];
+      } catch (e) {
+        console.warn(`[Auto-update] ${source.bank}/${source.platform}: Could not parse AI response — skipping`);
+        continue;
+      }
+
+      // Save each valid extracted offer to database
+      let saved = 0;
+      for (const offer of extractedOffers) {
+        if (!offer.title || !offer.value || !offer.platform) continue;
+        if (!platformList.includes(offer.platform)) continue;
+
+        const offerId = `crawl_${source.bank.toLowerCase().replace(/\s/g,'_')}_${source.platform}_${Date.now()}_${saved}`;
+        try {
+          const existing = await pool.query(
+            'SELECT id FROM offers WHERE bank=$1 AND platform=$2 AND value=$3 AND card=$4',
+            [offer.bank || source.bank, offer.platform, offer.value, offer.card || 'Credit']
+          );
+          if (existing.rows.length > 0) continue; // skip duplicate
+
+          await pool.query(
+            `INSERT INTO offers (id, bank, card, variant, platform, value, type, title, description, cap, validity, best)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+            [
+              offerId,
+              offer.bank || source.bank,
+              offer.card || 'Credit',
+              offer.variant || 'All',
+              offer.platform,
+              offer.value,
+              offer.type || 'cashback',
+              offer.title,
+              offer.description || '',
+              offer.cap || 'No cap',
+              offer.validity || '31 Dec 2026',
+              offer.best === true
+            ]
+          );
+          saved++;
+        } catch (e) {
+          console.warn(`[Auto-update] Could not save offer:`, e.message);
+        }
+      }
+
+      // Update last_crawled timestamp
+      await pool.query(
+        'UPDATE bank_sources SET last_crawled = NOW() WHERE id = $1',
+        [source.id]
+      );
+
+      console.log(`[Auto-update] ${source.bank}/${source.platform}: ${saved} new offers saved.`);
+      totalSaved += saved;
+
+    } catch (err) {
+      console.error(`[Auto-update] Failed for ${source.bank}/${source.platform}:`, err.message);
+    }
+  }
+
+  console.log(`[Auto-update] Crawl complete. Total new offers saved: ${totalSaved}`);
+  return totalSaved;
+}
+
+// ─── Step 4: Manual /crawl endpoint for testing ───────────────────────────────
+// Hit this URL in your browser to trigger a crawl manually:
+// https://cardoffers-server.onrender.com/crawl
+app.get('/crawl', async (req, res) => {
+  try {
+    console.log('[Crawl] Manual crawl triggered via /crawl endpoint');
+    const saved = await crawlAndUpdateOffers();
+    res.json({
+      success: true,
+      message: `Crawl complete. ${saved} new offers saved to database.`
+    });
+  } catch (e) {
+    console.error('[Crawl] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Bank sources management endpoints ───────────────────────────────────────
+// View all bank sources (admin use)
+app.get('/bank-sources', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM bank_sources ORDER BY bank, platform');
+    res.json(result.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Add a new bank source
+app.post('/bank-sources', async (req, res) => {
+  const { bank, platform, url } = req.body;
+  if (!bank || !platform || !url) return res.status(400).json({ error: 'bank, platform and url are required' });
+  try {
+    const result = await pool.query(
+      'INSERT INTO bank_sources (bank, platform, url) VALUES ($1, $2, $3) RETURNING *',
+      [bank, platform, url]
+    );
+    res.json({ success: true, source: result.rows[0] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Toggle a bank source active/inactive
+app.patch('/bank-sources/:id', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'UPDATE bank_sources SET active = NOT active WHERE id = $1 RETURNING *',
+      [req.params.id]
+    );
+    res.json({ success: true, source: result.rows[0] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// ─────────────────────────────────────────────────────────────────────────────
+
 app.delete('/offers/expired', async (req, res) => {
   try {
     const deleted = await deleteExpiredOffers();
@@ -409,6 +652,15 @@ initDB()
     app.listen(PORT, () => console.log(`CardOffers API running on port ${PORT}`));
     // Run cleanup after DB is confirmed ready
     deleteExpiredOffers().catch(err => console.error('[Auto-cleanup] Startup run failed:', err.message));
+
+    // Run weekly auto-crawl every Sunday at midnight
+    setInterval(() => {
+      const now = new Date();
+      if (now.getDay() === 0 && now.getHours() === 0) {
+        console.log('[Auto-update] Weekly crawl starting...');
+        crawlAndUpdateOffers().catch(err => console.error('[Auto-update] Weekly crawl failed:', err.message));
+      }
+    }, 60 * 60 * 1000); // checks every hour
   })
   .catch((err) => {
     console.error('Database connection failed:', err.message);
