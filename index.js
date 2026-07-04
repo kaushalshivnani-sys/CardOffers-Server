@@ -341,19 +341,49 @@ Return only the JSON array, nothing else.`
   }
 });
 
-// ─── Step 3: Crawler function ────────────────────────────────────────────────
+// ─── Step 3: Crawler function (Perplexity-powered) ──────────────────────────
 async function crawlAndUpdateOffers() {
-  console.log('[Auto-update] Starting offer crawl...');
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  console.log('[Auto-update] Starting Perplexity-powered offer crawl...');
+  console.log('[Auto-update] PERPLEXITY_API_KEY present:', !!process.env.PERPLEXITY_API_KEY);
 
-  let sources;
-  try {
-    const result = await pool.query('SELECT * FROM bank_sources WHERE active = true');
-    sources = result.rows;
-  } catch (e) {
-    console.error('[Auto-update] Could not fetch bank sources:', e.message);
-    return;
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const perplexityKey = process.env.PERPLEXITY_API_KEY;
+
+  if (!perplexityKey) {
+    console.error('[Auto-update] PERPLEXITY_API_KEY not set — aborting crawl.');
+    return 0;
   }
+
+  // All bank + platform combinations to search
+  const searchTargets = [
+    { bank: 'HDFC',   platform: 'amazon'   },
+    { bank: 'HDFC',   platform: 'flipkart' },
+    { bank: 'HDFC',   platform: 'swiggy'   },
+    { bank: 'HDFC',   platform: 'zomato'   },
+    { bank: 'HDFC',   platform: 'myntra'   },
+    { bank: 'Axis',   platform: 'amazon'   },
+    { bank: 'Axis',   platform: 'flipkart' },
+    { bank: 'Axis',   platform: 'swiggy'   },
+    { bank: 'Axis',   platform: 'zomato'   },
+    { bank: 'ICICI',  platform: 'amazon'   },
+    { bank: 'ICICI',  platform: 'flipkart' },
+    { bank: 'ICICI',  platform: 'swiggy'   },
+    { bank: 'SBI',    platform: 'amazon'   },
+    { bank: 'SBI',    platform: 'flipkart' },
+    { bank: 'SBI',    platform: 'irctc'    },
+    { bank: 'Kotak',  platform: 'amazon'   },
+    { bank: 'Kotak',  platform: 'swiggy'   },
+    { bank: 'IDFC',   platform: 'swiggy'   },
+    { bank: 'IDFC',   platform: 'amazon'   },
+    { bank: 'Amex',   platform: 'amazon'   },
+    { bank: 'IndusInd', platform: 'amazon' },
+    { bank: 'IndusInd', platform: 'swiggy' },
+    { bank: 'HSBC',   platform: 'amazon'   },
+    { bank: 'HSBC',   platform: 'flipkart' },
+    { bank: 'Yes Bank', platform: 'amazon' },
+    { bank: 'RBL',    platform: 'zomato'   },
+    { bank: 'RBL',    platform: 'amazon'   },
+  ];
 
   const platformList = [
     'amazon','flipkart','swiggy','zomato','myntra','ajio','bigbasket',
@@ -363,136 +393,167 @@ async function crawlAndUpdateOffers() {
     'hotstar','pharmeasy','netmeds','onemg','iocl','hpcl','phonepe'
   ];
 
+  // Map platform id to display name for better search queries
+  const platformNames = {
+    amazon: 'Amazon', flipkart: 'Flipkart', swiggy: 'Swiggy',
+    zomato: 'Zomato', myntra: 'Myntra', ajio: 'Ajio',
+    bigbasket: 'BigBasket', blinkit: 'Blinkit', nykaa: 'Nykaa',
+    makemytrip: 'MakeMyTrip', irctc: 'IRCTC', bookmyshow: 'BookMyShow',
+    meesho: 'Meesho', tatacliq: 'Tata CLiQ', jiomart: 'JioMart',
+    zepto: 'Zepto', goibibo: 'Goibibo', cleartrip: 'Cleartrip',
+    easemytrip: 'EaseMyTrip', pvr: 'PVR Cinemas', hotstar: 'Hotstar',
+    pharmeasy: 'PharmEasy', netmeds: 'Netmeds', onemg: '1mg',
+    iocl: 'Indian Oil', hpcl: 'HP Petrol', phonepe: 'PhonePe',
+  };
+
   let totalSaved = 0;
+  const today = new Date();
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const defaultValidity = `30 ${monthNames[today.getMonth() + 2 > 11 ? 0 : today.getMonth() + 2]} ${today.getMonth() + 2 > 11 ? today.getFullYear() + 1 : today.getFullYear()}`;
 
-  for (const source of sources) {
+  for (const target of searchTargets) {
     try {
-      console.log(`[Auto-update] Crawling ${source.bank} / ${source.platform}...`);
+      const platformDisplayName = platformNames[target.platform] || target.platform;
+      const searchQuery = `${target.bank} bank credit card cashback discount offers on ${platformDisplayName} India 2026 current active`;
 
-      // Fetch the bank offer page
-      const response = await fetch(source.url, {
+      console.log(`[Auto-update] Searching: ${target.bank} / ${platformDisplayName}...`);
+
+      // Step 1 — Ask Perplexity to search and summarise current offers
+      const perplexityResponse = await fetch('https://api.perplexity.ai/chat/completions', {
+        method: 'POST',
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-IN,en;q=0.9',
+          'Authorization': `Bearer ${perplexityKey}`,
+          'Content-Type': 'application/json',
         },
-        signal: AbortSignal.timeout(15000) // 15 second timeout
+        body: JSON.stringify({
+          model: 'llama-3.1-sonar-small-128k-online',
+          messages: [
+            {
+              role: 'system',
+              content: 'You are a helpful assistant that finds current Indian bank credit card offers. Be specific about discount percentages, caps, and validity dates. Only report currently active offers.'
+            },
+            {
+              role: 'user',
+              content: searchQuery
+            }
+          ],
+          max_tokens: 1000,
+          temperature: 0.1,
+          return_citations: false,
+        })
       });
 
-      if (!response.ok) {
-        console.warn(`[Auto-update] ${source.bank}/${source.platform}: HTTP ${response.status} — skipping`);
+      if (!perplexityResponse.ok) {
+        const errText = await perplexityResponse.text();
+        console.warn(`[Auto-update] Perplexity error for ${target.bank}/${target.platform}: ${perplexityResponse.status} — ${errText.substring(0,100)}`);
         continue;
       }
 
-      const html = await response.text();
+      const perplexityData = await perplexityResponse.json();
+      const searchResult = perplexityData?.choices?.[0]?.message?.content || '';
 
-      // Strip HTML tags and trim to save tokens
-      const cleanText = html
-        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-        .replace(/<[^>]*>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .substring(0, 10000);
-
-      if (cleanText.length < 100) {
-        console.warn(`[Auto-update] ${source.bank}/${source.platform}: Page content too short — skipping`);
+      if (!searchResult || searchResult.length < 50) {
+        console.warn(`[Auto-update] ${target.bank}/${target.platform}: No useful content from Perplexity — skipping`);
         continue;
       }
 
-      // Send to Claude AI for extraction
+      console.log(`[Auto-update] Got ${searchResult.length} chars from Perplexity for ${target.bank}/${target.platform}`);
+
+      // Step 2 — Ask Claude to extract structured JSON from Perplexity's result
       const aiResponse = await client.messages.create({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 2000,
+        max_tokens: 1500,
         messages: [{
           role: 'user',
-          content: `Extract all cashback and discount offers for ${source.bank} bank cards from this page text.
-Focus on offers for the platform: ${source.platform}.
-Return ONLY a valid JSON array, no explanation, no markdown.
+          content: `Extract all credit card offers for ${target.bank} bank on ${platformDisplayName} from the text below.
+Return ONLY a valid JSON array, no explanation, no markdown backticks.
 
 Each offer must have exactly these fields:
-- bank: "${source.bank}"
+- bank: "${target.bank}"
 - card: "Credit" or "Debit"
-- variant: specific card variant name, or "All" if applies to all cards
-- platform: "${source.platform}"
-- value: discount like "10%" or "500" or "5x"
+- variant: specific card variant name like "Millennia" or "Regalia", or "All" if applies to all cards
+- platform: "${target.platform}"
+- value: the discount like "10%" or "500" or "5x points"
 - type: "cashback" or "flat" or "points"
-- title: short offer title (max 60 chars)
-- description: brief description (max 120 chars)
-- cap: max discount cap like "Max 500" or "No cap"
-- validity: expiry date as "DD Mon YYYY" like "31 Dec 2026" — if not found use "31 Dec 2026"
-- best: true if exceptional deal, false otherwise
+- title: short title max 60 chars
+- description: brief description max 120 chars
+- cap: maximum cap like "Max 500" or "No cap"
+- validity: expiry date as "DD Mon YYYY" — if not mentioned use "${defaultValidity}"
+- best: true only if cashback is 10% or more or flat discount is 500 or more, otherwise false
 
-If no offers found, return an empty array: []
+If no specific offers found, return empty array: []
 
-Page text:
-${cleanText}
+Text to extract from:
+${searchResult}
 
 Return only the JSON array:`
         }]
       });
 
       const responseText = aiResponse.content[0].text.trim();
-      const cleaned = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
+      const cleanedJson = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
 
       let extractedOffers;
       try {
-        extractedOffers = JSON.parse(cleaned);
+        extractedOffers = JSON.parse(cleanedJson);
         if (!Array.isArray(extractedOffers)) extractedOffers = [];
       } catch (e) {
-        console.warn(`[Auto-update] ${source.bank}/${source.platform}: Could not parse AI response — skipping`);
+        console.warn(`[Auto-update] ${target.bank}/${target.platform}: JSON parse failed — skipping`);
         continue;
       }
 
-      // Save each valid extracted offer to database
+      console.log(`[Auto-update] ${target.bank}/${target.platform}: ${extractedOffers.length} offers extracted`);
+
+      // Step 3 — Save new offers to database, skip duplicates
       let saved = 0;
       for (const offer of extractedOffers) {
-        if (!offer.title || !offer.value || !offer.platform) continue;
+        if (!offer.title || !offer.value) continue;
         if (!platformList.includes(offer.platform)) continue;
 
-        const offerId = `crawl_${source.bank.toLowerCase().replace(/\s/g,'_')}_${source.platform}_${Date.now()}_${saved}`;
         try {
           const existing = await pool.query(
             'SELECT id FROM offers WHERE bank=$1 AND platform=$2 AND value=$3 AND card=$4',
-            [offer.bank || source.bank, offer.platform, offer.value, offer.card || 'Credit']
+            [target.bank, target.platform, offer.value, offer.card || 'Credit']
           );
-          if (existing.rows.length > 0) continue; // skip duplicate
+          if (existing.rows.length > 0) {
+            console.log(`[Auto-update] Skipping duplicate: ${target.bank} ${offer.value} on ${target.platform}`);
+            continue;
+          }
 
+          const offerId = `perp_${target.bank.toLowerCase().replace(/\s/g,'_')}_${target.platform}_${Date.now()}_${saved}`;
           await pool.query(
             `INSERT INTO offers (id, bank, card, variant, platform, value, type, title, description, cap, validity, best)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
             [
               offerId,
-              offer.bank || source.bank,
+              target.bank,
               offer.card || 'Credit',
               offer.variant || 'All',
-              offer.platform,
+              target.platform,
               offer.value,
               offer.type || 'cashback',
               offer.title,
               offer.description || '',
               offer.cap || 'No cap',
-              offer.validity || '31 Dec 2026',
+              offer.validity || defaultValidity,
               offer.best === true
             ]
           );
           saved++;
+          console.log(`[Auto-update] Saved: ${target.bank} — ${offer.title}`);
         } catch (e) {
           console.warn(`[Auto-update] Could not save offer:`, e.message);
         }
       }
 
-      // Update last_crawled timestamp
-      await pool.query(
-        'UPDATE bank_sources SET last_crawled = NOW() WHERE id = $1',
-        [source.id]
-      );
-
-      console.log(`[Auto-update] ${source.bank}/${source.platform}: ${saved} new offers saved.`);
       totalSaved += saved;
+      console.log(`[Auto-update] ${target.bank}/${target.platform}: ${saved} new offers saved.`);
+
+      // Small delay between requests to be respectful to APIs
+      await new Promise(r => setTimeout(r, 1500));
 
     } catch (err) {
-      console.error(`[Auto-update] Failed for ${source.bank}/${source.platform}:`, err.message);
+      console.error(`[Auto-update] Failed for ${target.bank}/${target.platform}:`, err.message);
     }
   }
 
