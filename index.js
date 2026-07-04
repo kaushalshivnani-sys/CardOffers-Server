@@ -426,7 +426,7 @@ async function crawlAndUpdateOffers() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'llama-3.1-sonar-small-128k-online',
+          model: 'sonar',
           messages: [
             {
               role: 'system',
@@ -598,7 +598,7 @@ app.get('/crawl-test', async (req, res) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'llama-3.1-sonar-small-128k-online',
+        model: 'sonar',
         messages: [
           { role: 'system', content: 'You are a helpful assistant.' },
           { role: 'user',   content: 'What is the current HDFC Millennia credit card cashback offer on Amazon India in 2026? Give specific percentage and cap.' }
