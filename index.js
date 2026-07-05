@@ -2,11 +2,34 @@ const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
 const Anthropic = require('@anthropic-ai/sdk');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static('.'));
+
+// ─── Rate limiting ────────────────────────────────────────────────────────────
+// General limiter: max 100 requests per 15 minutes per IP
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: { error: 'Too many requests. Please try again after 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Strict limiter for sensitive admin endpoints: max 10 requests per hour per IP
+const adminLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  message: { error: 'Too many admin requests. Please try again after an hour.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use(generalLimiter);
+// ─────────────────────────────────────────────────────────────────────────────
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -248,7 +271,7 @@ app.post('/submissions', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/submissions/:id/approve', async (req, res) => {
+app.post('/submissions/:id/approve', requireAdminKey, adminLimiter, async (req, res) => {
   try {
     const sub = await pool.query('SELECT * FROM community_submissions WHERE id=$1', [req.params.id]);
     if (!sub.rows.length) return res.status(404).json({ error: 'Submission not found' });
@@ -263,7 +286,7 @@ app.post('/submissions/:id/approve', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/submissions/:id/reject', async (req, res) => {
+app.post('/submissions/:id/reject', requireAdminKey, adminLimiter, async (req, res) => {
   try {
     await pool.query("UPDATE community_submissions SET status='rejected' WHERE id=$1", [req.params.id]);
     res.json({ success: true });
@@ -562,7 +585,7 @@ Return only the JSON array:`
 }
 
 // ─── Step 4: Manual /crawl endpoint for testing ───────────────────────────────
-app.get('/crawl', async (req, res) => {
+app.get('/crawl', requireAdminKey, adminLimiter, async (req, res) => {
   try {
     console.log('[Crawl] Manual crawl triggered via /crawl endpoint');
     const saved = await crawlAndUpdateOffers();
@@ -578,7 +601,7 @@ app.get('/crawl', async (req, res) => {
 
 // ─── Diagnostic endpoint — tests Perplexity key and one search ───────────────
 // Open in browser: https://cardoffers-server.onrender.com/crawl-test
-app.get('/crawl-test', async (req, res) => {
+app.get('/crawl-test', requireAdminKey, adminLimiter, async (req, res) => {
   const results = {};
 
   // Check 1 — are API keys present?
@@ -643,7 +666,7 @@ app.get('/crawl-test', async (req, res) => {
 
 // ─── Bank sources management endpoints ───────────────────────────────────────
 // View all bank sources (admin use)
-app.get('/bank-sources', async (req, res) => {
+app.get('/bank-sources', requireAdminKey, adminLimiter, async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM bank_sources ORDER BY bank, platform');
     res.json(result.rows);
@@ -651,7 +674,7 @@ app.get('/bank-sources', async (req, res) => {
 });
 
 // Add a new bank source
-app.post('/bank-sources', async (req, res) => {
+app.post('/bank-sources', requireAdminKey, adminLimiter, async (req, res) => {
   const { bank, platform, url } = req.body;
   if (!bank || !platform || !url) return res.status(400).json({ error: 'bank, platform and url are required' });
   try {
@@ -664,7 +687,7 @@ app.post('/bank-sources', async (req, res) => {
 });
 
 // Toggle a bank source active/inactive
-app.patch('/bank-sources/:id', async (req, res) => {
+app.patch('/bank-sources/:id', requireAdminKey, adminLimiter, async (req, res) => {
   try {
     const result = await pool.query(
       'UPDATE bank_sources SET active = NOT active WHERE id = $1 RETURNING *',
@@ -675,7 +698,7 @@ app.patch('/bank-sources/:id', async (req, res) => {
 });
 // ─────────────────────────────────────────────────────────────────────────────
 
-app.delete('/offers/expired', async (req, res) => {
+app.delete('/offers/expired', requireAdminKey, adminLimiter, async (req, res) => {
   try {
     const deleted = await deleteExpiredOffers();
     res.json({ success: true, removed: deleted });
@@ -722,7 +745,7 @@ setInterval(() => {
 }, 24 * 60 * 60 * 1000); // 24 hours in milliseconds
 // ─────────────────────────────────────────────────────────────────────────────
 
-app.post('/offers/deduplicate', async (req, res) => {
+app.post('/offers/deduplicate', requireAdminKey, adminLimiter, async (req, res) => {
   try {
     const result = await pool.query(`
       DELETE FROM offers
@@ -736,44 +759,24 @@ app.post('/offers/deduplicate', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/seed', async (req, res) => {
-  const defaultOffers = [
-    { id:'o1',  bank:'HDFC',  card:'Credit', variant:'Millennia',          platform:'amazon',     value:'5%',   type:'cashback', title:'5% cashback on Amazon Pay',        description:'Earn 5% back on all purchases via Amazon Pay balance.', cap:'150 per txn',      validity:'30 Jun 2026', best:true  },
-    { id:'o2',  bank:'HDFC',  card:'Credit', variant:'Regalia',             platform:'flipkart',   value:'10%',  type:'cashback', title:'10% instant discount on Flipkart', description:'Get 10% off on orders above 3000.',                     cap:'Max 1500',         validity:'30 Jun 2026', best:true  },
-    { id:'o3',  bank:'HDFC',  card:'Credit', variant:'Millennia',          platform:'swiggy',     value:'100',  type:'flat',     title:'100 off on Swiggy orders',         description:'Flat 100 off on 3 orders per month. Min order 299.',    cap:'3 uses per month', validity:'30 Jun 2026', best:false },
-    { id:'o4',  bank:'HDFC',  card:'Credit', variant:'Infinia',             platform:'makemytrip', value:'12%',  type:'cashback', title:'12% off on flights and hotels',    description:'12% instant discount on domestic flights and hotels.',  cap:'Max 3000',         validity:'30 Jun 2026', best:true  },
-    { id:'o5',  bank:'HDFC',  card:'Credit', variant:'Regalia',             platform:'myntra',     value:'15%',  type:'cashback', title:'15% cashback on Myntra',           description:'Earn 15% cashback on fashion purchases above 1500.',   cap:'Max 500',          validity:'30 Jun 2026', best:true  },
-    { id:'o6',  bank:'Axis',  card:'Credit', variant:'Flipkart Axis',      platform:'swiggy',     value:'20%',  type:'cashback', title:'20% off on Swiggy',                description:'Use Flipkart Axis Card for 20% off every Swiggy order.',cap:'Max 150 per order',validity:'30 Jun 2026', best:true  },
-    { id:'o7',  bank:'Axis',  card:'Credit', variant:'MY Zone',            platform:'zomato',     value:'10%',  type:'cashback', title:'10% cashback on Zomato',           description:'Get 10% cashback on Zomato orders. Min 250.',          cap:'Max 100 per txn',  validity:'30 Jun 2026', best:false },
-    { id:'o8',  bank:'Axis',  card:'Credit', variant:'Ace',                platform:'amazon',     value:'5%',   type:'cashback', title:'5% cashback on Amazon Axis Ace',   description:'Earn 5% cashback on Amazon with Axis Ace Credit Card.', cap:'Max 200 per month',validity:'30 Jun 2026', best:false },
-    { id:'o9',  bank:'Axis',  card:'Credit', variant:'Flipkart Axis',      platform:'flipkart',   value:'5%',   type:'cashback', title:'5% cashback on Flipkart',          description:'Unlimited 5% cashback on all Flipkart purchases.',      cap:'No cap',           validity:'30 Jun 2026', best:true  },
-    { id:'o10', bank:'SBI',   card:'Credit', variant:'SimplyCLICK',        platform:'amazon',     value:'10%',  type:'cashback', title:'10% off on Amazon',                description:'10% instant discount on Amazon Great Summer Sale.',     cap:'Max 1750',         validity:'30 Jun 2026', best:true  },
-    { id:'o11', bank:'SBI',   card:'Credit', variant:'IRCTC SBI Platinum', platform:'irctc',      value:'100',  type:'flat',     title:'100 off on IRCTC',                 description:'Flat 100 off on train ticket bookings on IRCTC.',       cap:'1 use per month',  validity:'30 Jun 2026', best:true  },
-    { id:'o12', bank:'ICICI', card:'Credit', variant:'Amazon Pay ICICI',   platform:'amazon',     value:'5%',   type:'cashback', title:'5% cashback Amazon Pay ICICI',     description:'Earn 5% on Amazon with Amazon Pay ICICI Credit Card.',  cap:'Unlimited',        validity:'30 Jun 2026', best:true  },
-    { id:'o13', bank:'ICICI', card:'Credit', variant:'MakeMyTrip ICICI',   platform:'makemytrip', value:'15%',  type:'cashback', title:'15% off on MakeMyTrip',            description:'15% off on flights and hotels via MakeMyTrip.',        cap:'Max 2000',         validity:'30 Jun 2026', best:true  },
-    { id:'o14', bank:'Kotak', card:'Credit', variant:'League Platinum',    platform:'amazon',     value:'7.5%', type:'cashback', title:'7.5% cashback on Amazon',          description:'Earn 7.5% cashback with Kotak League Platinum.',       cap:'Max 500 per month',validity:'30 Jun 2026', best:true  },
-    { id:'o15', bank:'IDFC',  card:'Credit', variant:'FIRST Millenia',     platform:'swiggy',     value:'100',  type:'flat',     title:'100 off on Swiggy IDFC',           description:'Flat 100 off every Swiggy order. Min 300.',            cap:'5 uses per month', validity:'30 Jun 2026', best:true  },
-    { id:'o16', bank:'Amex',  card:'Credit', variant:'Gold Card',          platform:'amazon',     value:'5x',   type:'points',   title:'5x reward points on Amazon',       description:'Earn 5x Membership Rewards points on Amazon.',         cap:'No cap',           validity:'30 Jun 2026', best:true  },
-    { id:'o17', bank:'Citi',  card:'Credit', variant:'Cashback',           platform:'amazon',     value:'10%',  type:'cashback', title:'10% cashback Citi on Amazon',      description:'10% cashback on Amazon via Citi Cashback Card.',       cap:'Max 1000 per month',validity:'30 Jun 2026', best:true  },
-    { id:'o18', bank:'SBI',   card:'Credit', variant:'SimplyCLICK',        platform:'bookmyshow', value:'25%',  type:'cashback', title:'25% off on BookMyShow',            description:'25% off on movie tickets. Min 2 tickets.',            cap:'Max 200 per txn',  validity:'30 Jun 2026', best:true  },
-    { id:'o19', bank:'Axis',  card:'Credit', variant:'Magnus',             platform:'nykaa',      value:'15%',  type:'cashback', title:'15% cashback on Nykaa',            description:'Earn 15% cashback on beauty and wellness on Nykaa.',  cap:'Max 300',          validity:'30 Jun 2026', best:true  },
-    { id:'o20', bank:'HDFC',  card:'Credit', variant:'Infinia',            platform:'bookmyshow', value:'20%',  type:'cashback', title:'20% off on BookMyShow',            description:'Get 20% off on movie and event tickets.',             cap:'Max 400 per txn',  validity:'30 Jun 2026', best:false },
-  ];
-  try {
-    for (const o of defaultOffers) {
-      await pool.query(
-        `INSERT INTO offers (id, bank, card, variant, platform, value, type, title, description, cap, validity, best) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (id) DO NOTHING`,
-        [o.id, o.bank, o.card, o.variant, o.platform, o.value, o.type, o.title, o.description, o.cap, o.validity, o.best]
-      );
-    }
-    res.json({ success: true, message: `${defaultOffers.length} offers seeded.` });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+// ─── Admin key middleware ─────────────────────────────────────────────────────
+// Protects sensitive endpoints. Set ADMIN_SECRET_KEY in Render environment.
+function requireAdminKey(req, res, next) {
+  const adminKey = process.env.ADMIN_SECRET_KEY;
+  if (!adminKey) return next(); // if key not set, allow (for backward compat during setup)
+  const provided = req.query.key || req.headers['x-admin-key'];
+  if (provided !== adminKey) {
+    return res.status(403).json({ error: 'Unauthorized. Admin key required.' });
+  }
+  next();
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3000;
 initDB()
   .then(() => {
     app.listen(PORT, () => console.log(`CardOffers API running on port ${PORT}`));
+
     // Run cleanup after DB is confirmed ready
     deleteExpiredOffers().catch(err => console.error('[Auto-cleanup] Startup run failed:', err.message));
 
@@ -785,6 +788,15 @@ initDB()
         crawlAndUpdateOffers().catch(err => console.error('[Auto-update] Weekly crawl failed:', err.message));
       }
     }, 60 * 60 * 1000); // checks every hour
+
+    // ── Keep-alive: self-ping every 10 minutes to prevent Render free tier sleep
+    const SERVER_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+    setInterval(() => {
+      fetch(`${SERVER_URL}/`)
+        .then(() => console.log('[Keep-alive] Server pinged successfully'))
+        .catch(() => console.log('[Keep-alive] Ping failed — server may be starting up'));
+    }, 10 * 60 * 1000); // every 10 minutes
+    console.log('[Keep-alive] Self-ping scheduler started');
   })
   .catch((err) => {
     console.error('Database connection failed:', err.message);
