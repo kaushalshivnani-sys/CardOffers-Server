@@ -55,6 +55,8 @@ async function initDB() {
       description TEXT,
       cap TEXT,
       validity TEXT,
+      min_spend INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'active',
       best BOOLEAN DEFAULT false,
       created_at TIMESTAMP DEFAULT NOW()
     );
@@ -64,6 +66,7 @@ async function initDB() {
       bank TEXT NOT NULL,
       card_type TEXT NOT NULL,
       variant TEXT NOT NULL,
+      synced_at TIMESTAMP DEFAULT NOW(),
       created_at TIMESTAMP DEFAULT NOW(),
       UNIQUE(user_id, bank, card_type, variant)
     );
@@ -173,13 +176,15 @@ app.get('/offers', async (req, res) => {
     };
 
     const activeOffers = result.rows.filter(o => {
+      // Fix 6: respect status field
+      if (o.status === 'expired' || o.status === 'deleted') return false;
       try {
         const parts = (o.validity || '').trim().split(' ');
-        if (parts.length < 3) return true; // keep if date unparseable
+        if (parts.length < 3) return true;
         const expiry = new Date(parseInt(parts[2]), months[parts[1]], parseInt(parts[0]));
         return expiry >= today;
       } catch (e) {
-        return true; // keep offer if parsing fails
+        return true;
       }
     });
 
@@ -188,13 +193,13 @@ app.get('/offers', async (req, res) => {
 });
 
 app.post('/offers', async (req, res) => {
-  const { id, bank, card, variant, platform, value, type, title, description, cap, validity, best } = req.body;
+  const { id, bank, card, variant, platform, value, type, title, description, cap, validity, best, min_spend, source_url } = req.body;
   try {
     await pool.query(
-      `INSERT INTO offers (id, bank, card, variant, platform, value, type, title, description, cap, validity, best)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-       ON CONFLICT (id) DO UPDATE SET bank=$2, card=$3, variant=$4, platform=$5, value=$6, type=$7, title=$8, description=$9, cap=$10, validity=$11, best=$12`,
-      [id, bank, card, variant, platform, value, type, title, description, cap, validity, best]
+      `INSERT INTO offers (id, bank, card, variant, platform, value, type, title, description, cap, validity, best, min_spend)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       ON CONFLICT (id) DO UPDATE SET bank=$2, card=$3, variant=$4, platform=$5, value=$6, type=$7, title=$8, description=$9, cap=$10, validity=$11, best=$12, min_spend=$13`,
+      [id, bank, card, variant, platform, value, type, title, description, cap, validity, best, min_spend||0]
     );
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -421,6 +426,17 @@ app.get('/submissions', async (req, res) => {
 app.post('/submissions', async (req, res) => {
   const { bank, card, variant, platform, value, type, title, description, cap, validity, submitted_by } = req.body;
   try {
+    // Fix 13: Rate limit — max 3 submissions per user per day
+    if (submitted_by && submitted_by !== 'anonymous') {
+      const today = new Date(); today.setHours(0,0,0,0);
+      const countResult = await pool.query(
+        `SELECT COUNT(*) FROM community_submissions WHERE submitted_by=$1 AND created_at >= $2`,
+        [submitted_by, today]
+      );
+      if (parseInt(countResult.rows[0].count) >= 3) {
+        return res.status(429).json({ error: 'You can submit a maximum of 3 offers per day. Thank you for contributing!' });
+      }
+    }
     await pool.query(
       `INSERT INTO community_submissions (bank, card, variant, platform, value, type, title, description, cap, validity, submitted_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
       [bank, card, variant||'All', platform, value, type, title, description||'', cap||'No cap', validity, submitted_by||'anonymous']
@@ -660,6 +676,7 @@ Each offer must have exactly these fields:
 - description: brief description max 120 chars
 - cap: maximum cap like "Max 500" or "No cap"
 - validity: expiry date as "DD Mon YYYY" — if not mentioned use "${defaultValidity}"
+- min_spend: minimum order amount as integer (e.g. 500 for "min order Rs 500"), or 0 if not mentioned
 - best: true only if cashback is 10% or more or flat discount is 500 or more, otherwise false
 
 If no specific offers found, return empty array: []
@@ -692,19 +709,26 @@ Return only the JSON array:`
         if (!platformList.includes(offer.platform)) continue;
 
         try {
+          // Fix 11: Improved dedup — check value similarity within 10% for cashback
           const existing = await pool.query(
-            'SELECT id FROM offers WHERE bank=$1 AND platform=$2 AND value=$3 AND card=$4',
-            [target.bank, target.platform, offer.value, offer.card || 'Credit']
+            `SELECT id, value FROM offers WHERE bank=$1 AND platform=$2 AND card=$3 AND status='active'`,
+            [target.bank, target.platform, offer.card || 'Credit']
           );
-          if (existing.rows.length > 0) {
+          const offerNum = parseFloat((offer.value||'').replace(/[^0-9.]/g,'')) || 0;
+          const isDuplicate = existing.rows.some(row => {
+            const rowNum = parseFloat((row.value||'').replace(/[^0-9.]/g,'')) || 0;
+            if (offerNum === 0 || rowNum === 0) return row.value === offer.value;
+            return Math.abs(offerNum - rowNum) / Math.max(offerNum, rowNum) < 0.10;
+          });
+          if (isDuplicate) {
             console.log(`[Auto-update] Skipping duplicate: ${target.bank} ${offer.value} on ${target.platform}`);
             continue;
           }
 
           const offerId = `perp_${target.bank.toLowerCase().replace(/\s/g,'_')}_${target.platform}_${Date.now()}_${saved}`;
           await pool.query(
-            `INSERT INTO offers (id, bank, card, variant, platform, value, type, title, description, cap, validity, best)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+            `INSERT INTO offers (id, bank, card, variant, platform, value, type, title, description, cap, validity, best, min_spend)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
             [
               offerId,
               target.bank,
@@ -717,7 +741,8 @@ Return only the JSON array:`
               offer.description || '',
               offer.cap || 'No cap',
               offer.validity || defaultValidity,
-              offer.best === true
+              offer.best === true,
+              parseInt(offer.min_spend) || 0,
             ]
           );
           saved++;
@@ -856,6 +881,16 @@ app.patch('/bank-sources/:id', requireAdminKey, adminLimiter, async (req, res) =
 });
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Fix 6: Get recently expired offers (last 30 days)
+app.get('/offers/past', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM offers WHERE status='expired' AND created_at > NOW() - INTERVAL '30 days' ORDER BY validity DESC LIMIT 50`
+    );
+    res.json(result.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.delete('/offers/expired', requireAdminKey, adminLimiter, async (req, res) => {
   try {
     const deleted = await deleteExpiredOffers();
@@ -892,8 +927,9 @@ async function deleteExpiredOffers() {
     return 0;
   }
 
-  await pool.query('DELETE FROM offers WHERE id = ANY($1)', [expiredIds]);
-  console.log(`[Auto-cleanup] Deleted ${expiredIds.length} expired offer(s).`);
+  // Fix 6: Soft-delete — mark as expired instead of hard delete
+  await pool.query("UPDATE offers SET status='expired' WHERE id = ANY($1)", [expiredIds]);
+  console.log(`[Auto-cleanup] Marked ${expiredIds.length} offer(s) as expired.`);
   return expiredIds.length;
 }
 
