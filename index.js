@@ -101,6 +101,30 @@ async function initDB() {
       last_crawled TIMESTAMP,
       active BOOLEAN DEFAULT true
     );
+    CREATE TABLE IF NOT EXISTS offer_reports (
+      id SERIAL PRIMARY KEY,
+      offer_id TEXT NOT NULL,
+      offer_title TEXT,
+      bank TEXT,
+      platform TEXT,
+      reason TEXT NOT NULL,
+      reported_by TEXT,
+      status TEXT DEFAULT 'pending',
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS user_backups (
+      id SERIAL PRIMARY KEY,
+      backup_code TEXT UNIQUE NOT NULL,
+      user_id TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      last_used TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS push_tokens (
+      id SERIAL PRIMARY KEY,
+      user_id TEXT NOT NULL UNIQUE,
+      token TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
   `);
 
   // Seed default bank sources if table is empty
@@ -252,6 +276,140 @@ app.post('/savings', async (req, res) => {
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// ─── Fix 1: Report incorrect offer ───────────────────────────────────────────
+app.post('/report-offer', async (req, res) => {
+  const { offer_id, offer_title, bank, platform, reason, reported_by } = req.body;
+  if (!offer_id || !reason) return res.status(400).json({ error: 'offer_id and reason are required' });
+  try {
+    await pool.query(
+      `INSERT INTO offer_reports (offer_id, offer_title, bank, platform, reason, reported_by)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [offer_id, offer_title||'', bank||'', platform||'', reason, reported_by||'anonymous']
+    );
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/reports', requireAdminKey, adminLimiter, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT * FROM offer_reports WHERE status='pending' ORDER BY created_at DESC"
+    );
+    res.json(result.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/reports/:id/resolve', requireAdminKey, adminLimiter, async (req, res) => {
+  try {
+    await pool.query("UPDATE offer_reports SET status='resolved' WHERE id=$1", [req.params.id]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/reports/:id/delete-offer', requireAdminKey, adminLimiter, async (req, res) => {
+  try {
+    const rpt = await pool.query('SELECT * FROM offer_reports WHERE id=$1', [req.params.id]);
+    if (!rpt.rows.length) return res.status(404).json({ error: 'Report not found' });
+    await pool.query('DELETE FROM offers WHERE id=$1', [rpt.rows[0].offer_id]);
+    await pool.query("UPDATE offer_reports SET status='resolved' WHERE id=$1", [req.params.id]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─── Fix 3: Backup code for wallet restore ────────────────────────────────────
+app.post('/backup/create', async (req, res) => {
+  const { user_id } = req.body;
+  if (!user_id) return res.status(400).json({ error: 'user_id required' });
+  try {
+    // Generate a readable 8-character alphanumeric code
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code = '';
+    for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
+
+    await pool.query(
+      `INSERT INTO user_backups (backup_code, user_id)
+       VALUES ($1, $2)
+       ON CONFLICT (backup_code) DO UPDATE SET user_id=$2, last_used=NOW()`,
+      [code, user_id]
+    );
+    res.json({ success: true, backup_code: code });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/backup/restore', async (req, res) => {
+  const { backup_code } = req.body;
+  if (!backup_code) return res.status(400).json({ error: 'backup_code required' });
+  try {
+    const result = await pool.query(
+      'SELECT * FROM user_backups WHERE backup_code=$1',
+      [backup_code.toUpperCase().trim()]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Invalid backup code. Please check and try again.' });
+
+    const original_user_id = result.rows[0].user_id;
+    await pool.query('UPDATE user_backups SET last_used=NOW() WHERE backup_code=$1', [backup_code]);
+
+    const wallet = await pool.query('SELECT * FROM wallets WHERE user_id=$1', [original_user_id]);
+    const savings = await pool.query('SELECT * FROM savings_log WHERE user_id=$1 ORDER BY created_at DESC', [original_user_id]);
+
+    res.json({
+      success: true,
+      original_user_id,
+      wallet: wallet.rows,
+      savings: savings.rows,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─── Fix 7: Push notification token registration ──────────────────────────────
+app.post('/push-token', async (req, res) => {
+  const { user_id, token } = req.body;
+  if (!user_id || !token) return res.status(400).json({ error: 'user_id and token required' });
+  try {
+    await pool.query(
+      `INSERT INTO push_tokens (user_id, token) VALUES ($1,$2)
+       ON CONFLICT (user_id) DO UPDATE SET token=$2`,
+      [user_id, token]
+    );
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Send weekly digest push notification (called by scheduler)
+async function sendWeeklyPushDigest() {
+  try {
+    const tokens = await pool.query('SELECT * FROM push_tokens');
+    if (!tokens.rows.length) return;
+
+    const offerCount = await pool.query('SELECT COUNT(*) FROM offers');
+    const count = parseInt(offerCount.rows[0].count);
+
+    const messages = tokens.rows.map(t => ({
+      to: t.token,
+      sound: 'default',
+      title: 'PickAPay — Weekly Update 🎉',
+      body: `${count} active offers available for your cards. Check what's new!`,
+      data: { screen: 'platforms' },
+    }));
+
+    // Send in batches of 100 (Expo limit)
+    for (let i = 0; i < messages.length; i += 100) {
+      const batch = messages.slice(i, i + 100);
+      await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(batch),
+      });
+    }
+    console.log(`[Push] Weekly digest sent to ${tokens.rows.length} devices`);
+  } catch (e) {
+    console.error('[Push] Failed to send weekly digest:', e.message);
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 app.get('/submissions', async (req, res) => {
   try {
@@ -786,6 +944,8 @@ initDB()
       if (now.getDay() === 0 && now.getHours() === 0) {
         console.log('[Auto-update] Weekly crawl starting...');
         crawlAndUpdateOffers().catch(err => console.error('[Auto-update] Weekly crawl failed:', err.message));
+        // Send weekly push digest on Sunday evening
+        sendWeeklyPushDigest().catch(err => console.error('[Push] Weekly digest failed:', err.message));
       }
     }, 60 * 60 * 1000); // checks every hour
 
