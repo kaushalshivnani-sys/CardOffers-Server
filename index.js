@@ -56,6 +56,7 @@ async function initDB() {
       cap TEXT,
       validity TEXT,
       min_spend INTEGER DEFAULT 0,
+      source_url TEXT,
       status TEXT DEFAULT 'active',
       best BOOLEAN DEFAULT false,
       created_at TIMESTAMP DEFAULT NOW()
@@ -134,16 +135,45 @@ async function initDB() {
   const sourceCount = await pool.query('SELECT COUNT(*) FROM bank_sources');
   if (parseInt(sourceCount.rows[0].count) === 0) {
     const defaultSources = [
-      { bank: 'HDFC',  platform: 'amazon',   url: 'https://www.hdfcbank.com/personal/pay/cards/credit-cards/credit-card-offers' },
-      { bank: 'HDFC',  platform: 'swiggy',   url: 'https://www.hdfcbank.com/personal/pay/cards/credit-cards/credit-card-offers' },
-      { bank: 'HDFC',  platform: 'flipkart', url: 'https://www.hdfcbank.com/personal/pay/cards/credit-cards/credit-card-offers' },
-      { bank: 'Axis',  platform: 'amazon',   url: 'https://www.axisbank.com/retail/offers' },
-      { bank: 'Axis',  platform: 'swiggy',   url: 'https://www.axisbank.com/retail/offers' },
-      { bank: 'ICICI', platform: 'amazon',   url: 'https://www.icicibank.com/offers' },
-      { bank: 'ICICI', platform: 'flipkart', url: 'https://www.icicibank.com/offers' },
-      { bank: 'SBI',   platform: 'amazon',   url: 'https://www.sbicard.com/en/personal/offers.page' },
-      { bank: 'Kotak', platform: 'amazon',   url: 'https://www.kotak.com/en/offers.html' },
-      { bank: 'IDFC',  platform: 'swiggy',   url: 'https://www.idfcfirstbank.com/offers' },
+      // HDFC
+      { bank: 'HDFC',   platform: 'amazon',      url: 'https://www.hdfcbank.com/personal/pay/cards/credit-cards/credit-card-offers' },
+      { bank: 'HDFC',   platform: 'flipkart',    url: 'https://www.hdfcbank.com/personal/pay/cards/credit-cards/credit-card-offers' },
+      { bank: 'HDFC',   platform: 'swiggy',      url: 'https://www.hdfcbank.com/personal/pay/cards/credit-cards/credit-card-offers' },
+      { bank: 'HDFC',   platform: 'zomato',      url: 'https://www.hdfcbank.com/personal/pay/cards/credit-cards/credit-card-offers' },
+      { bank: 'HDFC',   platform: 'myntra',      url: 'https://www.hdfcbank.com/personal/pay/cards/credit-cards/credit-card-offers' },
+      // Axis
+      { bank: 'Axis',   platform: 'amazon',      url: 'https://www.axisbank.com/retail/offers/shopping/amazon-offers' },
+      { bank: 'Axis',   platform: 'flipkart',    url: 'https://www.axisbank.com/retail/offers/shopping/flipkart-offers' },
+      { bank: 'Axis',   platform: 'swiggy',      url: 'https://www.axisbank.com/retail/offers/food-and-dining/swiggy-offers' },
+      { bank: 'Axis',   platform: 'zomato',      url: 'https://www.axisbank.com/retail/offers/food-and-dining/zomato-offers' },
+      { bank: 'Axis',   platform: 'iocl',        url: 'https://www.axisbank.com/retail/offers/petrol-pump-offers' },
+      // ICICI
+      { bank: 'ICICI',  platform: 'amazon',      url: 'https://www.icicibank.com/offers/online-shopping/amazon' },
+      { bank: 'ICICI',  platform: 'flipkart',    url: 'https://www.icicibank.com/offers/online-shopping/flipkart' },
+      { bank: 'ICICI',  platform: 'swiggy',      url: 'https://www.icicibank.com/offers/food/swiggy' },
+      { bank: 'ICICI',  platform: 'zomato',      url: 'https://www.icicibank.com/offers/food/zomato' },
+      { bank: 'ICICI',  platform: 'makemytrip',  url: 'https://www.icicibank.com/offers/travel/makemytrip' },
+      // SBI
+      { bank: 'SBI',    platform: 'amazon',      url: 'https://www.sbicard.com/en/personal/offers/shopping/amazon-great-offers.page' },
+      { bank: 'SBI',    platform: 'flipkart',    url: 'https://www.sbicard.com/en/personal/offers/shopping/flipkart-offers.page' },
+      { bank: 'SBI',    platform: 'irctc',       url: 'https://www.sbicard.com/en/personal/offers/travel/irctc-offers.page' },
+      { bank: 'SBI',    platform: 'swiggy',      url: 'https://www.sbicard.com/en/personal/offers/food-and-dining/swiggy.page' },
+      // Kotak
+      { bank: 'Kotak',  platform: 'amazon',      url: 'https://www.kotak.com/en/offers/online-shopping/amazon.html' },
+      { bank: 'Kotak',  platform: 'swiggy',      url: 'https://www.kotak.com/en/offers/food-and-dining/swiggy.html' },
+      { bank: 'Kotak',  platform: 'zomato',      url: 'https://www.kotak.com/en/offers/food-and-dining/zomato.html' },
+      // IDFC
+      { bank: 'IDFC',   platform: 'swiggy',      url: 'https://www.idfcfirstbank.com/offers/food-and-dining/swiggy' },
+      { bank: 'IDFC',   platform: 'amazon',      url: 'https://www.idfcfirstbank.com/offers/shopping/amazon' },
+      { bank: 'IDFC',   platform: 'flipkart',    url: 'https://www.idfcfirstbank.com/offers/shopping/flipkart' },
+      // IndusInd
+      { bank: 'IndusInd', platform: 'amazon',    url: 'https://www.indusind.com/iblogs/credit-cards/credit-card-offers/' },
+      { bank: 'IndusInd', platform: 'swiggy',    url: 'https://www.indusind.com/iblogs/credit-cards/credit-card-offers/' },
+      // HSBC
+      { bank: 'HSBC',   platform: 'amazon',      url: 'https://www.hsbc.co.in/credit-cards/offers/' },
+      { bank: 'HSBC',   platform: 'flipkart',    url: 'https://www.hsbc.co.in/credit-cards/offers/' },
+      // Yes Bank
+      { bank: 'Yes Bank', platform: 'amazon',    url: 'https://www.yesbank.in/personal-banking/yes-preferred/cards/credit-card/offers' },
     ];
     for (const s of defaultSources) {
       await pool.query(
@@ -726,9 +756,16 @@ Return only the JSON array:`
           }
 
           const offerId = `perp_${target.bank.toLowerCase().replace(/\s/g,'_')}_${target.platform}_${Date.now()}_${saved}`;
+          // Find source URL for this bank from bank_sources
+          const sourceRow = await pool.query(
+            'SELECT url FROM bank_sources WHERE bank=$1 AND platform=$2 LIMIT 1',
+            [target.bank, target.platform]
+          );
+          const sourceUrl = sourceRow.rows[0]?.url || null;
+
           await pool.query(
-            `INSERT INTO offers (id, bank, card, variant, platform, value, type, title, description, cap, validity, best, min_spend)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+            `INSERT INTO offers (id, bank, card, variant, platform, value, type, title, description, cap, validity, best, min_spend, source_url)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
             [
               offerId,
               target.bank,
@@ -743,6 +780,7 @@ Return only the JSON array:`
               offer.validity || defaultValidity,
               offer.best === true,
               parseInt(offer.min_spend) || 0,
+              sourceUrl,
             ]
           );
           saved++;
