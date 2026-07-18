@@ -609,18 +609,34 @@ async function addManually() {
 
 
 async function loadReports() {
-  const key = prompt('Enter admin key:');
+  const key = prompt('Enter admin key (same as ADMIN_SECRET_KEY in Render):');
   if (!key) return;
   setMsg('reports-msg', 'Loading...', 'info');
   try {
-    const r = await fetch(BASE + '/reports?key=' + key);
+    const r = await fetch(BASE + '/reports?key=' + encodeURIComponent(key));
+    if (r.status === 403) { setMsg('reports-msg', 'Wrong admin key. Check ADMIN_SECRET_KEY in Render.', 'error'); return; }
     const data = await r.json();
+    if (!Array.isArray(data)) { setMsg('reports-msg', 'Unexpected response from server.', 'error'); return; }
     const el = document.getElementById('reports-list');
-    if (!data.length) { el.innerHTML = '<div class="empty">No pending reports. All clear! ✓</div>'; setMsg('reports-msg','',''); return; }
-    el.innerHTML = data.map(rep => '<div class="sub-card" id="rpt-' + rep.id + '"><div class="offer-info"><div class="offer-title">' + (rep.offer_title||rep.offer_id) + '</div><div class="offer-meta"><span class="badge b-bank">' + rep.bank + '</span> ' + rep.platform + ' &bull; ' + new Date(rep.created_at).toLocaleDateString("en-IN") + '</div><div style="margin-top:8px;font-size:12px;color:#a32d2d;background:#fff5f5;padding:8px;border-radius:6px">Issue: ' + rep.reason + '</div></div><div class="sub-actions" style="flex-direction:column"><button class="btn btn-gray btn-sm" onclick="resolveReport(' + rep.id + ',\'' + key + '\')">✓ Resolve</button><button class="btn btn-danger btn-sm" onclick="deleteReportedOffer(' + rep.id + ',\'' + key + '\')">Delete Offer</button></div></div>').join('');
-    setMsg('reports-msg', data.length + ' pending report(s)', 'info');
-  } catch(e) { setMsg('reports-msg','Failed to load','error'); }
+    if (data.length === 0) {
+      el.innerHTML = '<div style="padding:20px;text-align:center;color:#888">No reports yet. Reports submitted from the app will appear here.</div>';
+      setMsg('reports-msg', 'No reports found', 'info');
+      return;
+    }
+    el.innerHTML = data.map(rep =>
+      '<div class="sub-card" id="rpt-' + rep.id + '" style="display:flex;gap:12px;padding:14px;margin-bottom:10px;background:#fff;border-radius:10px;border:1px solid #e0e0e0">' +
+      '<div style="flex:1"><div style="font-weight:600;margin-bottom:4px">' + (rep.offer_title||rep.offer_id||'Unknown') + '</div>' +
+      '<div style="font-size:12px;color:#666;margin-bottom:8px">' + (rep.bank||'') + ' · ' + (rep.platform||'') + ' · ' + rep.status + ' · ' + new Date(rep.created_at).toLocaleDateString("en-IN") + '</div>' +
+      '<div style="font-size:12px;color:#a32d2d;background:#fff5f5;padding:8px;border-radius:6px">Issue: ' + (rep.reason||'No reason given') + '</div></div>' +
+      '<div style="display:flex;flex-direction:column;gap:6px">' +
+      '<button class="btn btn-gray btn-sm" onclick="resolveReport(' + rep.id + ','' + key + '')">✓ Resolve</button>' +
+      '<button class="btn btn-danger btn-sm" onclick="deleteReportedOffer(' + rep.id + ','' + key + '')">Delete Offer</button>' +
+      '</div></div>'
+    ).join('');
+    setMsg('reports-msg', data.length + ' report(s) found', 'info');
+  } catch(e) { setMsg('reports-msg', 'Failed: ' + e.message, 'error'); }
 }
+
 
 async function resolveReport(id, key) {
   await fetch(BASE + '/reports/' + id + '/resolve?key=' + key, { method: 'POST' });
@@ -638,18 +654,38 @@ async function deleteReportedOffer(id, key) {
 async function lookupBackup() {
   var code = document.getElementById('backup-code-input').value.toUpperCase().trim();
   if (!code) { setMsg('backup-msg','Enter a backup code','error'); return; }
-  var key = prompt('Enter admin key:');
-  if (!key) return;
+  if (code.length !== 8) { setMsg('backup-msg','Backup code must be exactly 8 characters','error'); return; }
   setMsg('backup-msg','Looking up...','info');
   try {
-    var r = await fetch(BASE + '/backup/restore', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({backup_code:code}) });
+    var r = await fetch(BASE + '/backup/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ backup_code: code })
+    });
     var data = await r.json();
-    if (!data.success) { setMsg('backup-msg', data.error||'Not found','error'); return; }
     var el = document.getElementById('backup-result');
+    if (!data.success) {
+      setMsg('backup-msg', data.error || 'Code not found. Check the code and try again.', 'error');
+      el.style.display = 'none';
+      return;
+    }
     el.style.display = 'block';
-    el.innerHTML = '<div class="tip-box"><strong>User found</strong>User ID: ' + data.original_user_id + '<br>Wallet cards: ' + data.wallet.length + '<br>Savings entries: ' + data.savings.length + '</div>' + data.wallet.map(function(c){ return '<div class="offer-list-item"><span class="badge b-bank">' + c.bank + '</span> ' + c.variant + ' (' + c.card_type + ')</div>'; }).join('');
-    setMsg('backup-msg','Found!','success');
-  } catch(e) { setMsg('backup-msg','Lookup failed','error'); }
+    var walletHtml = data.wallet && data.wallet.length > 0
+      ? data.wallet.map(function(c) {
+          return '<div style="padding:8px 12px;border-bottom:1px solid #f0f0f0">' +
+            '<span style="background:#E6F1FB;color:#185FA5;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600;margin-right:8px">' + c.bank + '</span>' +
+            c.variant + ' <span style="color:#888;font-size:12px">(' + c.card_type + ')</span></div>';
+        }).join('')
+      : '<div style="padding:12px;color:#888">No cards found</div>';
+    el.innerHTML = '<div style="background:#E1F5EE;border-radius:8px;padding:14px;margin-bottom:12px">' +
+      '<strong style="color:#085041">✓ User found</strong><br>' +
+      '<span style="font-size:12px;color:#333">User ID: ' + data.original_user_id + '</span><br>' +
+      '<span style="font-size:12px;color:#333">Cards: ' + (data.wallet||[]).length + ' &bull; Savings: ' + (data.savings||[]).length + '</span></div>' +
+      '<div style="background:#fff;border:1px solid #e0e0e0;border-radius:8px;overflow:hidden">' + walletHtml + '</div>';
+    setMsg('backup-msg', 'User found successfully', 'success');
+  } catch(e) {
+    setMsg('backup-msg', 'Lookup failed: ' + e.message, 'error');
+  }
 }
 
 checkServer();

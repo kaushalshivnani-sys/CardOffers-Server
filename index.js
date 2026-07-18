@@ -105,6 +105,17 @@ async function initDB() {
       last_crawled TIMESTAMP,
       active BOOLEAN DEFAULT true
     );
+    CREATE TABLE IF NOT EXISTS card_features (
+      id SERIAL PRIMARY KEY,
+      bank TEXT NOT NULL,
+      card_type TEXT NOT NULL,
+      variant TEXT NOT NULL,
+      feature_category TEXT,
+      feature_name TEXT NOT NULL,
+      feature_detail TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(bank, variant, feature_name)
+    );
     CREATE TABLE IF NOT EXISTS offer_reports (
       id SERIAL PRIMARY KEY,
       offer_id TEXT NOT NULL,
@@ -297,6 +308,25 @@ app.delete('/wallet/:userId/:bank/:cardType/:variant', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Fix 3+6: Delete a single savings log entry
+app.delete('/savings/:userId/:entryId', async (req, res) => {
+  try {
+    await pool.query(
+      'DELETE FROM savings_log WHERE user_id=$1 AND id=$2',
+      [req.params.userId, req.params.entryId]
+    );
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Fix 3+6: Delete all savings logs for a user
+app.delete('/savings/:userId', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM savings_log WHERE user_id=$1', [req.params.userId]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/savings/:userId', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM savings_log WHERE user_id=$1 ORDER BY created_at DESC', [req.params.userId]);
@@ -329,10 +359,14 @@ app.post('/report-offer', async (req, res) => {
 app.get('/reports', requireAdminKey, adminLimiter, async (req, res) => {
   try {
     const result = await pool.query(
-      "SELECT * FROM offer_reports WHERE status='pending' ORDER BY created_at DESC"
+      "SELECT * FROM offer_reports ORDER BY created_at DESC LIMIT 100"
     );
-    res.json(result.rows);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    // Always return array even if empty
+    res.json(result.rows || []);
+  } catch (e) {
+    console.error('[Reports] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.post('/reports/:id/resolve', requireAdminKey, adminLimiter, async (req, res) => {
@@ -739,6 +773,21 @@ Return only the JSON array:`
         if (!platformList.includes(offer.platform)) continue;
 
         try {
+          // Fix 5: Validate offer actually belongs to the target platform
+          // Reject if title/description mentions a specific other merchant
+          const offerText = ((offer.title || '') + ' ' + (offer.description || '')).toLowerCase();
+          const platformName = (platformNames[target.platform] || target.platform).toLowerCase();
+          // List of known merchant-specific keywords that indicate wrong platform
+          const exclusiveKeywords = ['igp', 'india gifts portal', 'nykaa fashion', 'irctc',
+            'paytm mall', 'dineout', 'eazydiner', 'goibibo', 'cleartrip', 'easemytrip'];
+          const mentionedOtherMerchant = exclusiveKeywords.some(kw =>
+            offerText.includes(kw) && !platformName.includes(kw) && !target.platform.includes(kw)
+          );
+          if (mentionedOtherMerchant) {
+            console.log(`[Auto-update] Skipping misclassified offer: "${offer.title}" (mentions wrong merchant)`);
+            continue;
+          }
+
           // Fix 11: Improved dedup — check value similarity within 10% for cashback
           const existing = await pool.query(
             `SELECT id, value FROM offers WHERE bank=$1 AND platform=$2 AND card=$3 AND status='active'`,
@@ -804,6 +853,94 @@ Return only the JSON array:`
   console.log(`[Auto-update] Crawl complete. Total new offers saved: ${totalSaved}`);
   return totalSaved;
 }
+
+// ─── Card Features endpoints ─────────────────────────────────────────────────
+app.get('/card-features/:bank/:variant', async (req, res) => {
+  try {
+    const { bank, variant } = req.params;
+    const result = await pool.query(
+      `SELECT * FROM card_features WHERE bank=$1 AND variant=$2 ORDER BY feature_category, feature_name`,
+      [bank, variant]
+    );
+    res.json(result.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Crawl and store card features using Perplexity + Claude
+app.get('/crawl-features', requireAdminKey, adminLimiter, async (req, res) => {
+  try {
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const perplexityKey = process.env.PERPLEXITY_API_KEY;
+
+    // Get unique bank+variant combinations from wallets
+    const cards = await pool.query(
+      'SELECT DISTINCT bank, card_type, variant FROM wallets LIMIT 50'
+    );
+
+    let saved = 0;
+    for (const card of cards.rows) {
+      const searchQuery = `${card.bank} ${card.variant} credit card features benefits lounge access reward points India 2026`;
+      const perplexityResponse = await fetch('https://api.perplexity.ai/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${perplexityKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'sonar',
+          messages: [
+            { role: 'system', content: 'List credit card benefits concisely.' },
+            { role: 'user', content: searchQuery }
+          ],
+          max_tokens: 800,
+        })
+      });
+
+      if (!perplexityResponse.ok) continue;
+      const pData = await perplexityResponse.json();
+      const searchResult = pData?.choices?.[0]?.message?.content || '';
+      if (!searchResult || searchResult.length < 50) continue;
+
+      const aiResponse = await client.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1000,
+        messages: [{
+          role: 'user',
+          content: `Extract card benefits for ${card.bank} ${card.variant} from this text.
+Return ONLY a JSON array, no explanation:
+[{
+  "feature_category": "Lounge Access" or "Rewards" or "Cashback" or "Insurance" or "Dining" or "Travel" or "Fuel" or "Entertainment" or "Other",
+  "feature_name": "short benefit name",
+  "feature_detail": "specific detail like '2 free visits per quarter' or '5X reward points on dining'"
+}]
+
+Text: ${searchResult}
+Return only the JSON array:`
+        }]
+      });
+
+      const text = aiResponse.content[0].text.replace(/\`\`\`json|\`\`\`/g,'').trim();
+      let features = [];
+      try { features = JSON.parse(text); } catch(e) { continue; }
+
+      for (const f of features) {
+        if (!f.feature_name) continue;
+        try {
+          await pool.query(
+            `INSERT INTO card_features (bank, card_type, variant, feature_category, feature_name, feature_detail)
+             VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (bank, variant, feature_name) DO UPDATE
+             SET feature_detail=$6, feature_category=$4`,
+            [card.bank, card.card_type, card.variant, f.feature_category||'Other', f.feature_name, f.feature_detail||'']
+          );
+          saved++;
+        } catch(e) {}
+      }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    res.json({ success: true, message: `Card features crawl complete. ${saved} features saved.` });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ─── Step 4: Manual /crawl endpoint for testing ───────────────────────────────
 app.get('/crawl', requireAdminKey, adminLimiter, async (req, res) => {
