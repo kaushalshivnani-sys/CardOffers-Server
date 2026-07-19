@@ -861,6 +861,96 @@ Return only the JSON array:`
 }
 
 // ─── Card Features endpoints ─────────────────────────────────────────────────
+// User-facing: fetch features for a specific card using Perplexity + Claude
+app.post('/fetch-card-features', async (req, res) => {
+  const { bank, variant, card_type } = req.body;
+  if (!bank || !variant) return res.status(400).json({ error: 'bank and variant required' });
+
+  const perplexityKey = process.env.PERPLEXITY_API_KEY;
+  if (!perplexityKey) return res.status(500).json({ error: 'Perplexity API not configured' });
+
+  try {
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const searchQuery = `${bank} ${variant} credit card all benefits features 2026: lounge access reward points cashback offers insurance dining entertainment fuel India`;
+
+    const perplexityResponse = await fetch('https://api.perplexity.ai/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${perplexityKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'sonar',
+        messages: [
+          { role: 'system', content: 'List all credit card benefits and features in detail.' },
+          { role: 'user', content: searchQuery }
+        ],
+        max_tokens: 1200,
+        temperature: 0.1,
+      })
+    });
+
+    if (!perplexityResponse.ok) {
+      const err = await perplexityResponse.text();
+      return res.status(500).json({ error: 'Perplexity error: ' + err.substring(0,100) });
+    }
+
+    const pData = await perplexityResponse.json();
+    const searchResult = pData?.choices?.[0]?.message?.content || '';
+
+    if (!searchResult || searchResult.length < 50) {
+      return res.json({ features: [] });
+    }
+
+    const aiResponse = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1500,
+      messages: [{
+        role: 'user',
+        content: `Extract all benefits and features of the ${bank} ${variant} credit card from this text.
+Return ONLY a valid JSON array, no explanation, no markdown backticks.
+Each item must have exactly these fields:
+- feature_category: one of "Lounge Access", "Rewards", "Cashback", "Insurance", "Dining", "Travel", "Fuel", "Entertainment", "Other"
+- feature_name: short benefit name (max 50 chars)
+- feature_detail: specific detail like "2 free domestic lounge visits per quarter" (max 150 chars)
+
+If a benefit is mentioned but no detail given, still include it with feature_detail as empty string.
+Return empty array [] if no features found.
+
+Text:
+${searchResult}
+
+Return only the JSON array:`
+      }]
+    });
+
+    const text = aiResponse.content[0].text.replace(/\`\`\`json|\`\`\`/g,'').trim();
+    let features = [];
+    try { features = JSON.parse(text); if (!Array.isArray(features)) features = []; }
+    catch(e) { features = []; }
+
+    // Save to database for future use
+    for (const f of features) {
+      if (!f.feature_name) continue;
+      try {
+        await pool.query(
+          `INSERT INTO card_features (bank, card_type, variant, feature_category, feature_name, feature_detail)
+           VALUES ($1,$2,$3,$4,$5,$6)
+           ON CONFLICT (bank, variant, feature_name) DO UPDATE
+           SET feature_detail=$6, feature_category=$4`,
+          [bank, card_type||'Credit', variant, f.feature_category||'Other', f.feature_name, f.feature_detail||'']
+        );
+      } catch(e) {}
+    }
+
+    res.json({ success: true, features });
+
+  } catch(e) {
+    console.error('[CardFeatures] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/card-features/:bank/:variant', async (req, res) => {
   try {
     const { bank, variant } = req.params;

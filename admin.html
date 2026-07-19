@@ -274,34 +274,40 @@
 const SERVER = 'https://cardoffers-server.onrender.com';
 let extractedOffers = [];
 
-async function checkServer() {
+function checkServer() {
+  // Non-blocking — runs in background, never prevents tab usage
   const el = document.getElementById('server-status');
-  el.textContent = 'Connecting...';
-  try {
-    const r = await fetch(SERVER + '/health', { signal: AbortSignal.timeout(8000) });
-    if (r.ok) {
-      el.textContent = '● Server connected';
-      el.style.color = '#90EE90';
-    } else {
-      el.textContent = '● Server error (' + r.status + ')';
-      el.style.color = '#FFB3B3';
-    }
-  } catch(e) {
-    // Fallback: try the offers endpoint
+  el.textContent = '○ Checking...';
+  // Use setTimeout so it never blocks page render or tab clicks
+  setTimeout(async function() {
     try {
-      const r2 = await fetch(SERVER + '/offers', { signal: AbortSignal.timeout(8000) });
-      if (r2.ok) {
-        el.textContent = '● Server connected';
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10000);
+      const r = await fetch(SERVER + '/health', { signal: controller.signal });
+      clearTimeout(timer);
+      if (r.ok) {
+        el.textContent = '● Connected';
         el.style.color = '#90EE90';
       } else {
-        el.textContent = '● Server unreachable';
+        el.textContent = '● Error ' + r.status;
         el.style.color = '#FFB3B3';
       }
-    } catch(e2) {
-      el.textContent = '● Server offline';
-      el.style.color = '#FFB3B3';
+    } catch(e) {
+      try {
+        const r2 = await fetch(SERVER + '/offers?_check=1');
+        if (r2.ok) {
+          el.textContent = '● Connected';
+          el.style.color = '#90EE90';
+        } else {
+          el.textContent = '● Unreachable';
+          el.style.color = '#FFB3B3';
+        }
+      } catch(e2) {
+        el.textContent = '● Offline';
+        el.style.color = '#FFB3B3';
+      }
     }
-  }
+  }, 100);
 }
 
 function showTab(name, btn) {
