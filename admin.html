@@ -275,12 +275,32 @@ const SERVER = 'https://cardoffers-server.onrender.com';
 let extractedOffers = [];
 
 async function checkServer() {
+  const el = document.getElementById('server-status');
+  el.textContent = 'Connecting...';
   try {
-    const r = await fetch(SERVER + '/');
-    const d = await r.json();
-    document.getElementById('server-status').textContent = d.status ? 'Server connected' : 'Server error';
+    const r = await fetch(SERVER + '/health', { signal: AbortSignal.timeout(8000) });
+    if (r.ok) {
+      el.textContent = '● Server connected';
+      el.style.color = '#90EE90';
+    } else {
+      el.textContent = '● Server error (' + r.status + ')';
+      el.style.color = '#FFB3B3';
+    }
   } catch(e) {
-    document.getElementById('server-status').textContent = 'Server offline';
+    // Fallback: try the offers endpoint
+    try {
+      const r2 = await fetch(SERVER + '/offers', { signal: AbortSignal.timeout(8000) });
+      if (r2.ok) {
+        el.textContent = '● Server connected';
+        el.style.color = '#90EE90';
+      } else {
+        el.textContent = '● Server unreachable';
+        el.style.color = '#FFB3B3';
+      }
+    } catch(e2) {
+      el.textContent = '● Server offline';
+      el.style.color = '#FFB3B3';
+    }
   }
 }
 
@@ -613,7 +633,7 @@ async function loadReports() {
   if (!key) return;
   setMsg('reports-msg', 'Loading...', 'info');
   try {
-    const r = await fetch(BASE + '/reports?key=' + encodeURIComponent(key));
+    const r = await fetch(SERVER + '/reports?key=' + encodeURIComponent(key));
     if (r.status === 403) { setMsg('reports-msg', 'Wrong admin key. Check ADMIN_SECRET_KEY in Render.', 'error'); return; }
     const data = await r.json();
     if (!Array.isArray(data)) { setMsg('reports-msg', 'Unexpected response from server.', 'error'); return; }
@@ -639,14 +659,14 @@ async function loadReports() {
 
 
 async function resolveReport(id, key) {
-  await fetch(BASE + '/reports/' + id + '/resolve?key=' + key, { method: 'POST' });
+  await fetch(SERVER + '/reports/' + id + '/resolve?key=' + key, { method: 'POST' });
   var el = document.getElementById('rpt-' + id);
   if (el) el.remove();
 }
 
 async function deleteReportedOffer(id, key) {
   if (!confirm('Delete this offer from database?')) return;
-  await fetch(BASE + '/reports/' + id + '/delete-offer?key=' + key, { method: 'POST' });
+  await fetch(SERVER + '/reports/' + id + '/delete-offer?key=' + key, { method: 'POST' });
   var el = document.getElementById('rpt-' + id);
   if (el) el.remove();
 }
@@ -657,7 +677,7 @@ async function lookupBackup() {
   if (code.length !== 8) { setMsg('backup-msg','Backup code must be exactly 8 characters','error'); return; }
   setMsg('backup-msg','Looking up...','info');
   try {
-    var r = await fetch(BASE + '/backup/restore', {
+    var r = await fetch(SERVER + '/backup/restore', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ backup_code: code })

@@ -202,6 +202,12 @@ app.get('/', (req, res) => {
   res.json({ status: 'CardOffers API is running!' });
 });
 
+// ─── Health check endpoint ────────────────────────────────────────────────────
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+// ─────────────────────────────────────────────────────────────────────────────
+
 app.get('/offers', async (req, res) => {
   try {
     // Only return offers that have not yet expired
