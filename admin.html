@@ -274,6 +274,14 @@
 const SERVER = 'https://cardoffers-server.onrender.com';
 let extractedOffers = [];
 
+// ── Utility: set status message ───────────────────────────────────────────────
+function setMsg(id, text, type) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'status-msg' + (type ? ' ' + type : '');
+}
+
 function checkServer() {
   // Non-blocking — runs in background, never prevents tab usage
   const el = document.getElementById('server-status');
@@ -514,18 +522,30 @@ async function loadSubmissions() {
   }
 }
 
+let _adminKey = '';
+function getAdminKey() {
+  if (!_adminKey) _adminKey = prompt('Enter admin key (ADMIN_SECRET_KEY from Render):');
+  return _adminKey;
+}
+
 async function approveSubmission(id, btn) {
+  const key = getAdminKey();
+  if (!key) return;
   btn.disabled = true; btn.textContent = '...';
   try {
-    await fetch(SERVER + '/submissions/' + id + '/approve', { method: 'POST' });
+    const r = await fetch(SERVER + '/submissions/' + id + '/approve?key=' + encodeURIComponent(key), { method: 'POST' });
+    if (r.status === 403) { _adminKey = ''; alert('Wrong admin key.'); btn.disabled = false; btn.textContent = 'Approve'; return; }
     loadSubmissions();
   } catch(e) { btn.disabled = false; btn.textContent = 'Approve'; }
 }
 
 async function rejectSubmission(id, btn) {
+  const key = getAdminKey();
+  if (!key) return;
   btn.disabled = true; btn.textContent = '...';
   try {
-    await fetch(SERVER + '/submissions/' + id + '/reject', { method: 'POST' });
+    const r = await fetch(SERVER + '/submissions/' + id + '/reject?key=' + encodeURIComponent(key), { method: 'POST' });
+    if (r.status === 403) { _adminKey = ''; alert('Wrong admin key.'); btn.disabled = false; btn.textContent = 'Reject'; return; }
     loadSubmissions();
   } catch(e) { btn.disabled = false; btn.textContent = 'Reject'; }
 }
@@ -556,8 +576,10 @@ async function loadOffers() {
 }
 async function deduplicateOffers() {
   if (!confirm('This will remove all duplicate offers keeping only the latest version of each. Continue?')) return;
+  const key = getAdminKey();
+  if (!key) return;
   try {
-    const r = await fetch(SERVER + '/offers/deduplicate', { method: 'POST' });
+    const r = await fetch(SERVER + '/offers/deduplicate?key=' + encodeURIComponent(key), { method: 'POST' });
     const data = await r.json();
     if (data.success) {
       alert('Done! Removed ' + data.removed + ' duplicate offers.');
@@ -584,9 +606,12 @@ async function removeExpired() {
 
 async function deleteOffer(id, btn) {
   if (!confirm('Delete this offer?')) return;
+  const key = getAdminKey();
+  if (!key) return;
   btn.disabled = true;
   try {
-    await fetch(SERVER + '/offers/' + id, { method: 'DELETE' });
+    const r = await fetch(SERVER + '/offers/' + id + '?key=' + encodeURIComponent(key), { method: 'DELETE' });
+    if (r.status === 403) { _adminKey = ''; alert('Wrong admin key.'); btn.disabled = false; return; }
     loadOffers();
   } catch(e) { btn.disabled = false; }
 }
@@ -635,7 +660,7 @@ async function addManually() {
 
 
 async function loadReports() {
-  const key = prompt('Enter admin key (same as ADMIN_SECRET_KEY in Render):');
+  const key = getAdminKey();
   if (!key) return;
   setMsg('reports-msg', 'Loading...', 'info');
   try {
@@ -665,14 +690,14 @@ async function loadReports() {
 
 
 async function resolveReport(id, key) {
-  await fetch(SERVER + '/reports/' + id + '/resolve?key=' + key, { method: 'POST' });
+  await fetch(SERVER + '/reports/' + id + '/resolve?key=' + encodeURIComponent(getAdminKey()), { method: 'POST' });
   var el = document.getElementById('rpt-' + id);
   if (el) el.remove();
 }
 
 async function deleteReportedOffer(id, key) {
   if (!confirm('Delete this offer from database?')) return;
-  await fetch(SERVER + '/reports/' + id + '/delete-offer?key=' + key, { method: 'POST' });
+  await fetch(SERVER + '/reports/' + id + '/delete-offer?key=' + encodeURIComponent(getAdminKey()), { method: 'POST' });
   var el = document.getElementById('rpt-' + id);
   if (el) el.remove();
 }
