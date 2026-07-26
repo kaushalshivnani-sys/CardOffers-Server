@@ -238,25 +238,26 @@ app.get('/seed-fuel', requireAdminKey, adminLimiter, async (req, res) => {
   let saved = 0;
   for (const offer of fuelOffers) {
     try {
+      // Use only core columns that are guaranteed to exist
       await pool.query(
-        `INSERT INTO offers (id, bank, card, variant, platform, value, type, title, description, cap, validity, best, min_spend, source_url)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+        `INSERT INTO offers (id, bank, card, variant, platform, value, type, title, description, cap, validity, best)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
          ON CONFLICT (id) DO UPDATE SET
-           title=$8, description=$9, cap=$10, validity=$11, best=$12, min_spend=$13`,
+           bank=$2, card=$3, variant=$4, platform=$5, value=$6,
+           type=$7, title=$8, description=$9, cap=$10, validity=$11, best=$12`,
         [
           offer.id, offer.bank, offer.card, offer.variant, offer.platform,
           offer.value, offer.type, offer.title, offer.description,
-          offer.cap, offer.validity, offer.best, offer.min_spend || 0,
-          `https://www.axisbank.com/retail/cards/credit-card/axis-bank-indianoil-credit-card`,
+          offer.cap, offer.validity, offer.best,
         ]
       );
       saved++;
     } catch (e) {
-      console.error('[Seed Fuel] Error:', e.message);
+      console.error('[Seed Fuel] Error on offer', offer.id, ':', e.message);
     }
   }
-  console.log(`[Seed Fuel] ${saved} fuel offers seeded`);
-  res.json({ success: true, message: `${saved} fuel offers seeded successfully.` });
+  console.log(`[Seed Fuel] ${saved} fuel offers saved/updated`);
+  res.json({ success: true, message: `${saved} fuel offers saved to database successfully.`, total: fuelOffers.length });
 });
 // ─────────────────────────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────────────────────
