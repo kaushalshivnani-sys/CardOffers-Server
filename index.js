@@ -206,6 +206,59 @@ app.get('/', (req, res) => {
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// ─── Seed known fuel card offers ──────────────────────────────────────────────
+// These are well-documented stable offers for co-branded fuel cards
+// Call: GET /seed-fuel?key=ADMIN_KEY
+app.get('/seed-fuel', requireAdminKey, adminLimiter, async (req, res) => {
+  const fuelOffers = [
+    // Axis Indian Oil Credit Card
+    { id: 'axis_iocl_001', bank: 'Axis',   card: 'Credit', variant: 'Indian Oil',   platform: 'iocl', value: '4%',   type: 'cashback', title: '4% value back on Indian Oil fuel',              description: '4% value back as EDGE REWARD Points on Indian Oil fuel transactions',           cap: 'No cap',    validity: '31 Dec 2026', best: true,  min_spend: 0 },
+    { id: 'axis_iocl_002', bank: 'Axis',   card: 'Credit', variant: 'Indian Oil',   platform: 'iocl', value: '1%',   type: 'cashback', title: 'Fuel surcharge waiver',                        description: '1% fuel surcharge waiver on Indian Oil transactions above ₹400',               cap: 'Max ₹400',  validity: '31 Dec 2026', best: false, min_spend: 400 },
+    { id: 'axis_iocl_003', bank: 'Axis',   card: 'Credit', variant: 'Indian Oil',   platform: 'hpcl', value: '2%',   type: 'cashback', title: '2% value back on HPCL fuel',                   description: '2% value back as EDGE REWARD Points on HPCL fuel transactions',                cap: 'No cap',    validity: '31 Dec 2026', best: false, min_spend: 0 },
+    // ICICI HPCL Super Saver Credit Card
+    { id: 'icici_hpcl_001', bank: 'ICICI', card: 'Credit', variant: 'HPCL Super Saver', platform: 'hpcl', value: '4%',   type: 'cashback', title: '4% cashback on HPCL fuel',               description: '4% cashback on HPCL fuel transactions at HP petrol pumps',                     cap: 'Max ₹200/month', validity: '31 Dec 2026', best: true,  min_spend: 0 },
+    { id: 'icici_hpcl_002', bank: 'ICICI', card: 'Credit', variant: 'HPCL Super Saver', platform: 'hpcl', value: '1%',   type: 'cashback', title: 'Fuel surcharge waiver at HPCL',           description: '1% fuel surcharge waiver on HPCL transactions',                                cap: 'No cap',    validity: '31 Dec 2026', best: false, min_spend: 0 },
+    // SBI BPCL Card
+    { id: 'sbi_bpcl_001',   bank: 'SBI',   card: 'Credit', variant: 'BPCL SBI Card',    platform: 'bpcl', value: '4.25%', type: 'cashback', title: '4.25% cashback on BPCL fuel',            description: '13X reward points on BPCL fuel — equivalent to 4.25% value back',              cap: 'No cap',    validity: '31 Dec 2026', best: true,  min_spend: 0 },
+    { id: 'sbi_bpcl_002',   bank: 'SBI',   card: 'Credit', variant: 'BPCL SBI Card',    platform: 'bpcl', value: '1%',   type: 'cashback', title: 'Fuel surcharge waiver at BPCL',           description: '1% fuel surcharge waiver on BPCL transactions above ₹500',                     cap: 'Max ₹100', validity: '31 Dec 2026', best: false, min_spend: 500 },
+    // SBI BPCL Octane
+    { id: 'sbi_bpcl_oct_001', bank: 'SBI', card: 'Credit', variant: 'BPCL Octane',      platform: 'bpcl', value: '6.25%', type: 'cashback', title: '6.25% cashback on BPCL Octane fuel',    description: '25X reward points on BPCL Speed/Power petrol — equivalent to 6.25% value back', cap: 'No cap',   validity: '31 Dec 2026', best: true,  min_spend: 0 },
+    // HDFC Indian Oil Credit Card
+    { id: 'hdfc_iocl_001',  bank: 'HDFC',  card: 'Credit', variant: 'Indian Oil Citi',  platform: 'iocl', value: '5%',   type: 'cashback', title: '5% fuel points on Indian Oil',           description: '5% fuel points on Indian Oil transactions redeemable for free fuel',            cap: 'No cap',    validity: '31 Dec 2026', best: true,  min_spend: 0 },
+    // IDFC HPCL Credit Card
+    { id: 'idfc_iocl_001',  bank: 'IDFC',  card: 'Credit', variant: 'HPCL IDFC',        platform: 'hpcl', value: '4%',   type: 'cashback', title: '4% cashback on HPCL fuel',               description: '4% cashback on all HPCL petrol pump transactions',                             cap: 'No cap',    validity: '31 Dec 2026', best: true,  min_spend: 0 },
+    // General fuel surcharge waiver - all major banks
+    { id: 'hdfc_fuel_001',  bank: 'HDFC',  card: 'Credit', variant: 'All',              platform: 'iocl', value: '1%',   type: 'cashback', title: 'Fuel surcharge waiver at Indian Oil',   description: '1% fuel surcharge waiver on HDFC credit card fuel transactions above ₹400',    cap: 'Max ₹250', validity: '31 Dec 2026', best: false, min_spend: 400 },
+    { id: 'icici_fuel_001', bank: 'ICICI', card: 'Credit', variant: 'All',              platform: 'iocl', value: '1%',   type: 'cashback', title: 'Fuel surcharge waiver at Indian Oil',   description: '1% fuel surcharge waiver on ICICI credit card fuel transactions above ₹500',   cap: 'Max ₹250', validity: '31 Dec 2026', best: false, min_spend: 500 },
+    { id: 'sbi_fuel_001',   bank: 'SBI',   card: 'Credit', variant: 'All',              platform: 'bpcl', value: '1%',   type: 'cashback', title: 'Fuel surcharge waiver at BPCL',         description: '1% fuel surcharge waiver on SBI credit card fuel transactions above ₹500',     cap: 'Max ₹100', validity: '31 Dec 2026', best: false, min_spend: 500 },
+    { id: 'axis_fuel_001',  bank: 'Axis',  card: 'Credit', variant: 'All',              platform: 'iocl', value: '1%',   type: 'cashback', title: 'Fuel surcharge waiver at Indian Oil',   description: '1% fuel surcharge waiver on Axis credit card fuel transactions above ₹400',    cap: 'Max ₹400', validity: '31 Dec 2026', best: false, min_spend: 400 },
+  ];
+
+  let saved = 0;
+  for (const offer of fuelOffers) {
+    try {
+      await pool.query(
+        `INSERT INTO offers (id, bank, card, variant, platform, value, type, title, description, cap, validity, best, min_spend, source_url)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+         ON CONFLICT (id) DO UPDATE SET
+           title=$8, description=$9, cap=$10, validity=$11, best=$12, min_spend=$13`,
+        [
+          offer.id, offer.bank, offer.card, offer.variant, offer.platform,
+          offer.value, offer.type, offer.title, offer.description,
+          offer.cap, offer.validity, offer.best, offer.min_spend || 0,
+          `https://www.axisbank.com/retail/cards/credit-card/axis-bank-indianoil-credit-card`,
+        ]
+      );
+      saved++;
+    } catch (e) {
+      console.error('[Seed Fuel] Error:', e.message);
+    }
+  }
+  console.log(`[Seed Fuel] ${saved} fuel offers seeded`);
+  res.json({ success: true, message: `${saved} fuel offers seeded successfully.` });
+});
+// ─────────────────────────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────────────────────
 
 app.get('/offers', async (req, res) => {
@@ -622,34 +675,160 @@ async function crawlAndUpdateOffers() {
   }
 
   // All bank + platform combinations to search
+  // ── Complete search targets — all 15 Smart Shop categories ─────────────────
   const searchTargets = [
-    { bank: 'HDFC',   platform: 'amazon'   },
-    { bank: 'HDFC',   platform: 'flipkart' },
-    { bank: 'HDFC',   platform: 'swiggy'   },
-    { bank: 'HDFC',   platform: 'zomato'   },
-    { bank: 'HDFC',   platform: 'myntra'   },
-    { bank: 'Axis',   platform: 'amazon'   },
-    { bank: 'Axis',   platform: 'flipkart' },
-    { bank: 'Axis',   platform: 'swiggy'   },
-    { bank: 'Axis',   platform: 'zomato'   },
-    { bank: 'ICICI',  platform: 'amazon'   },
-    { bank: 'ICICI',  platform: 'flipkart' },
-    { bank: 'ICICI',  platform: 'swiggy'   },
-    { bank: 'SBI',    platform: 'amazon'   },
-    { bank: 'SBI',    platform: 'flipkart' },
-    { bank: 'SBI',    platform: 'irctc'    },
-    { bank: 'Kotak',  platform: 'amazon'   },
-    { bank: 'Kotak',  platform: 'swiggy'   },
-    { bank: 'IDFC',   platform: 'swiggy'   },
-    { bank: 'IDFC',   platform: 'amazon'   },
-    { bank: 'Amex',   platform: 'amazon'   },
-    { bank: 'IndusInd', platform: 'amazon' },
-    { bank: 'IndusInd', platform: 'swiggy' },
-    { bank: 'HSBC',   platform: 'amazon'   },
-    { bank: 'HSBC',   platform: 'flipkart' },
-    { bank: 'Yes Bank', platform: 'amazon' },
-    { bank: 'RBL',    platform: 'zomato'   },
-    { bank: 'RBL',    platform: 'amazon'   },
+
+    // SHOPPING
+    { bank: 'HDFC',            platform: 'amazon'         },
+    { bank: 'HDFC',            platform: 'flipkart'       },
+    { bank: 'HDFC',            platform: 'tatacliq'       },
+    { bank: 'Axis',            platform: 'amazon'         },
+    { bank: 'Axis',            platform: 'flipkart'       },
+    { bank: 'ICICI',           platform: 'amazon'         },
+    { bank: 'ICICI',           platform: 'flipkart'       },
+    { bank: 'SBI',             platform: 'amazon'         },
+    { bank: 'SBI',             platform: 'flipkart'       },
+    { bank: 'Kotak',           platform: 'amazon'         },
+    { bank: 'IDFC',            platform: 'amazon'         },
+    { bank: 'Amex',            platform: 'amazon'         },
+    { bank: 'IndusInd',        platform: 'amazon'         },
+    { bank: 'HSBC',            platform: 'amazon'         },
+    { bank: 'HSBC',            platform: 'flipkart'       },
+    { bank: 'Yes Bank',        platform: 'amazon'         },
+    { bank: 'RBL',             platform: 'amazon'         },
+    { bank: 'Standard Chartered', platform: 'amazon'      },
+
+    // FASHION
+    { bank: 'HDFC',            platform: 'myntra'         },
+    { bank: 'Axis',            platform: 'myntra'         },
+    { bank: 'ICICI',           platform: 'myntra'         },
+    { bank: 'Kotak',           platform: 'myntra'         },
+    { bank: 'HDFC',            platform: 'ajio'           },
+    { bank: 'Axis',            platform: 'ajio'           },
+    { bank: 'ICICI',           platform: 'meesho'         },
+    { bank: 'SBI',             platform: 'meesho'         },
+
+    // BEAUTY
+    { bank: 'HDFC',            platform: 'nykaa'          },
+    { bank: 'Axis',            platform: 'nykaa'          },
+    { bank: 'ICICI',           platform: 'nykaa'          },
+    { bank: 'Kotak',           platform: 'nykaa'          },
+    { bank: 'HDFC',            platform: 'nykaafashion'   },
+
+    // FOOD DELIVERY
+    { bank: 'HDFC',            platform: 'swiggy'         },
+    { bank: 'HDFC',            platform: 'zomato'         },
+    { bank: 'Axis',            platform: 'swiggy'         },
+    { bank: 'Axis',            platform: 'zomato'         },
+    { bank: 'ICICI',           platform: 'swiggy'         },
+    { bank: 'ICICI',           platform: 'zomato'         },
+    { bank: 'SBI',             platform: 'swiggy'         },
+    { bank: 'Kotak',           platform: 'swiggy'         },
+    { bank: 'IDFC',            platform: 'swiggy'         },
+    { bank: 'RBL',             platform: 'zomato'         },
+    { bank: 'IndusInd',        platform: 'eazydiner'      },
+    { bank: 'Kotak',           platform: 'zomato'         },
+
+    // GROCERIES
+    { bank: 'HDFC',            platform: 'bigbasket'      },
+    { bank: 'ICICI',           platform: 'bigbasket'      },
+    { bank: 'Axis',            platform: 'bigbasket'      },
+    { bank: 'SBI',             platform: 'bigbasket'      },
+    { bank: 'Kotak',           platform: 'bigbasket'      },
+    { bank: 'HDFC',            platform: 'blinkit'        },
+    { bank: 'Axis',            platform: 'blinkit'        },
+    { bank: 'ICICI',           platform: 'blinkit'        },
+    { bank: 'HDFC',            platform: 'zepto'          },
+    { bank: 'Axis',            platform: 'zepto'          },
+    { bank: 'HDFC',            platform: 'swiggyinstamart'},
+    { bank: 'IDFC',            platform: 'bigbasket'      },
+    { bank: 'HDFC',            platform: 'jiomart'        },
+    { bank: 'SBI',             platform: 'jiomart'        },
+
+    // TRAVEL — FLIGHTS
+    { bank: 'HDFC',            platform: 'makemytrip'     },
+    { bank: 'ICICI',           platform: 'makemytrip'     },
+    { bank: 'Axis',            platform: 'makemytrip'     },
+    { bank: 'SBI',             platform: 'makemytrip'     },
+    { bank: 'Kotak',           platform: 'goibibo'        },
+    { bank: 'ICICI',           platform: 'goibibo'        },
+    { bank: 'HDFC',            platform: 'cleartrip'      },
+    { bank: 'ICICI',           platform: 'cleartrip'      },
+    { bank: 'SBI',             platform: 'irctc'          },
+    { bank: 'HDFC',            platform: 'irctc'          },
+    { bank: 'Axis',            platform: 'easemytrip'     },
+    { bank: 'IndusInd',        platform: 'makemytrip'     },
+    { bank: 'Yes Bank',        platform: 'makemytrip'     },
+
+    // HOTELS
+    { bank: 'HDFC',            platform: 'marriott'       },
+    { bank: 'ICICI',           platform: 'marriott'       },
+    { bank: 'Amex',            platform: 'marriott'       },
+    { bank: 'Axis',            platform: 'oyo'            },
+    { bank: 'SBI',             platform: 'oyo'            },
+    { bank: 'ICICI',           platform: 'tajhotels'      },
+    { bank: 'HDFC',            platform: 'tajhotels'      },
+
+    // ENTERTAINMENT
+    { bank: 'HDFC',            platform: 'bookmyshow'     },
+    { bank: 'Axis',            platform: 'bookmyshow'     },
+    { bank: 'ICICI',           platform: 'bookmyshow'     },
+    { bank: 'SBI',             platform: 'bookmyshow'     },
+    { bank: 'Kotak',           platform: 'pvr'            },
+    { bank: 'HDFC',            platform: 'pvr'            },
+    { bank: 'ICICI',           platform: 'inox'           },
+    { bank: 'HDFC',            platform: 'hotstar'        },
+    { bank: 'Axis',            platform: 'hotstar'        },
+
+    // HEALTHCARE
+    { bank: 'HDFC',            platform: 'pharmeasy'      },
+    { bank: 'ICICI',           platform: 'pharmeasy'      },
+    { bank: 'Axis',            platform: 'pharmeasy'      },
+    { bank: 'HDFC',            platform: 'onemg'          },
+    { bank: 'SBI',             platform: 'netmeds'        },
+    { bank: 'Kotak',           platform: 'onemg'          },
+
+    // FUEL
+    { bank: 'Axis',            platform: 'iocl'           },
+    { bank: 'HDFC',            platform: 'iocl'           },
+    { bank: 'HDFC',            platform: 'hpcl'           },
+    { bank: 'ICICI',           platform: 'hpcl'           },
+    { bank: 'SBI',             platform: 'bpcl'           },
+    { bank: 'IDFC',            platform: 'iocl'           },
+    { bank: 'IndusInd',        platform: 'iocl'           },
+    { bank: 'Kotak',           platform: 'iocl'           },
+
+    // BILLS & PAYMENTS
+    { bank: 'HDFC',            platform: 'phonepe'        },
+    { bank: 'Axis',            platform: 'phonepe'        },
+    { bank: 'ICICI',           platform: 'cred'           },
+    { bank: 'HDFC',            platform: 'cred'           },
+    { bank: 'SBI',             platform: 'paytm'          },
+    { bank: 'Kotak',           platform: 'phonepe'        },
+
+    // FURNITURE
+    { bank: 'HDFC',            platform: 'pepperfry'      },
+    { bank: 'Axis',            platform: 'pepperfry'      },
+    { bank: 'ICICI',           platform: 'pepperfry'      },
+    { bank: 'Kotak',           platform: 'pepperfry'      },
+
+    // EYEWEAR
+    { bank: 'HDFC',            platform: 'lenskart'       },
+    { bank: 'Axis',            platform: 'lenskart'       },
+    { bank: 'ICICI',           platform: 'lenskart'       },
+
+    // RIDES
+    { bank: 'HDFC',            platform: 'ola'            },
+    { bank: 'Axis',            platform: 'ola'            },
+    { bank: 'HDFC',            platform: 'uber'           },
+    { bank: 'Axis',            platform: 'uber'           },
+    { bank: 'ICICI',           platform: 'uber'           },
+
+    // DINING
+    { bank: 'IndusInd',        platform: 'dineout'        },
+    { bank: 'HDFC',            platform: 'dineout'        },
+    { bank: 'Axis',            platform: 'dineout'        },
+    { bank: 'ICICI',           platform: 'dineout'        },
   ];
 
   const platformList = [
@@ -657,7 +836,9 @@ async function crawlAndUpdateOffers() {
     'blinkit','nykaa','makemytrip','irctc','bookmyshow','meesho',
     'tatacliq','jiomart','nykaafashion','eazydiner','zepto','dmartready',
     'swiggyinstamart','goibibo','cleartrip','easemytrip','pvr','inox',
-    'hotstar','pharmeasy','netmeds','onemg','iocl','hpcl','phonepe'
+    'hotstar','pharmeasy','netmeds','onemg','iocl','hpcl','bpcl','phonepe',
+    'cred','paytm','dineout','marriott','tajhotels','oyo','lenskart',
+    'pepperfry','ola','uber'
   ];
 
   // Map platform id to display name for better search queries
