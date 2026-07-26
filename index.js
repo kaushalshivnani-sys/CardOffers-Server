@@ -195,7 +195,34 @@ async function initDB() {
     console.log(`[Bank Sources] Seeded ${defaultSources.length} default sources.`);
   }
 
-  console.log('Database tables ready');
+  // ─── Column migrations — safely adds new columns to existing tables ──────────
+  // These run on every server start. IF NOT EXISTS means they are safe to re-run.
+  const migrations = [
+    // offers table — new columns added over time
+    `ALTER TABLE offers ADD COLUMN IF NOT EXISTS min_spend   INTEGER DEFAULT 0`,
+    `ALTER TABLE offers ADD COLUMN IF NOT EXISTS source_url  TEXT`,
+    `ALTER TABLE offers ADD COLUMN IF NOT EXISTS status      TEXT DEFAULT 'active'`,
+    // wallets table
+    `ALTER TABLE wallets ADD COLUMN IF NOT EXISTS synced_at  TIMESTAMP DEFAULT NOW()`,
+    // savings_log table — ensure id is always returned
+    `ALTER TABLE savings_log ADD COLUMN IF NOT EXISTS amount INTEGER`,
+  ];
+
+  for (const sql of migrations) {
+    try {
+      await pool.query(sql);
+    } catch (e) {
+      // Log but don't crash — column may already exist with different type
+      console.warn('[Migration] Skipped:', sql.substring(0, 60), '-', e.message);
+    }
+  }
+
+  // Back-fill status for existing rows that have NULL status
+  try {
+    await pool.query(`UPDATE offers SET status = 'active' WHERE status IS NULL`);
+  } catch (e) {}
+
+  console.log('[DB] Tables and migrations ready');
 }
 
 app.get('/', (req, res) => {
@@ -240,15 +267,17 @@ app.get('/seed-fuel', requireAdminKey, adminLimiter, async (req, res) => {
     try {
       // Use only core columns that are guaranteed to exist
       await pool.query(
-        `INSERT INTO offers (id, bank, card, variant, platform, value, type, title, description, cap, validity, best)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        `INSERT INTO offers (id, bank, card, variant, platform, value, type, title, description, cap, validity, best, min_spend, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'active')
          ON CONFLICT (id) DO UPDATE SET
            bank=$2, card=$3, variant=$4, platform=$5, value=$6,
-           type=$7, title=$8, description=$9, cap=$10, validity=$11, best=$12`,
+           type=$7, title=$8, description=$9, cap=$10, validity=$11, best=$12,
+           min_spend=$13, status='active'`,
         [
           offer.id, offer.bank, offer.card, offer.variant, offer.platform,
           offer.value, offer.type, offer.title, offer.description,
           offer.cap, offer.validity, offer.best,
+          offer.min_spend || 0,
         ]
       );
       saved++;
@@ -277,8 +306,8 @@ app.get('/offers', async (req, res) => {
     };
 
     const activeOffers = result.rows.filter(o => {
-      // Fix 6: respect status field
-      if (o.status === 'expired' || o.status === 'deleted') return false;
+      // Respect status field — null status means active (migration not yet run)
+      if (o.status && (o.status === 'expired' || o.status === 'deleted')) return false;
       try {
         const parts = (o.validity || '').trim().split(' ');
         if (parts.length < 3) return true;
@@ -297,9 +326,10 @@ app.post('/offers', async (req, res) => {
   const { id, bank, card, variant, platform, value, type, title, description, cap, validity, best, min_spend, source_url } = req.body;
   try {
     await pool.query(
-      `INSERT INTO offers (id, bank, card, variant, platform, value, type, title, description, cap, validity, best, min_spend)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-       ON CONFLICT (id) DO UPDATE SET bank=$2, card=$3, variant=$4, platform=$5, value=$6, type=$7, title=$8, description=$9, cap=$10, validity=$11, best=$12, min_spend=$13`,
+      `INSERT INTO offers (id, bank, card, variant, platform, value, type, title, description, cap, validity, best, min_spend, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'active')
+       ON CONFLICT (id) DO UPDATE SET bank=$2, card=$3, variant=$4, platform=$5, value=$6,
+         type=$7, title=$8, description=$9, cap=$10, validity=$11, best=$12, min_spend=$13, status='active'`,
       [id, bank, card, variant, platform, value, type, title, description, cap, validity, best, min_spend||0]
     );
     res.json({ success: true });
@@ -978,7 +1008,7 @@ Return only the JSON array:`
 
           // Fix 11: Improved dedup — check value similarity within 10% for cashback
           const existing = await pool.query(
-            `SELECT id, value FROM offers WHERE bank=$1 AND platform=$2 AND card=$3 AND status='active'`,
+            `SELECT id, value FROM offers WHERE bank=$1 AND platform=$2 AND card=$3 AND (status='active' OR status IS NULL)`,
             [target.bank, target.platform, offer.card || 'Credit']
           );
           const offerNum = parseFloat((offer.value||'').replace(/[^0-9.]/g,'')) || 0;
@@ -1001,8 +1031,8 @@ Return only the JSON array:`
           const sourceUrl = sourceRow.rows[0]?.url || null;
 
           await pool.query(
-            `INSERT INTO offers (id, bank, card, variant, platform, value, type, title, description, cap, validity, best, min_spend, source_url)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+            `INSERT INTO offers (id, bank, card, variant, platform, value, type, title, description, cap, validity, best, min_spend, source_url, status)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'active')`,
             [
               offerId,
               target.bank,
@@ -1340,6 +1370,7 @@ app.get('/offers/past', async (req, res) => {
     const result = await pool.query(
       `SELECT * FROM offers WHERE status='expired' AND created_at > NOW() - INTERVAL '30 days' ORDER BY validity DESC LIMIT 50`
     );
+    // Note: if status column didn't exist before migration, this returns 0 rows gracefully
     res.json(result.rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1381,6 +1412,7 @@ async function deleteExpiredOffers() {
   }
 
   // Fix 6: Soft-delete — mark as expired instead of hard delete
+  // status column guaranteed by migration — safe to update
   await pool.query("UPDATE offers SET status='expired' WHERE id = ANY($1)", [expiredIds]);
   console.log(`[Auto-cleanup] Marked ${expiredIds.length} offer(s) as expired.`);
   return expiredIds.length;
