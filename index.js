@@ -5,6 +5,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const rateLimit = require('express-rate-limit');
 
 const app = express();
+app.set('trust proxy', 1); // Trust Render's load balancer for correct IP detection
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static('.'));
