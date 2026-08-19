@@ -117,6 +117,20 @@ async function initDB() {
       created_at TIMESTAMP DEFAULT NOW(),
       UNIQUE(bank, variant, feature_name)
     );
+    CREATE TABLE IF NOT EXISTS offer_verifications (
+      id SERIAL PRIMARY KEY,
+      offer_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      worked BOOLEAN NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(offer_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS app_stats (
+      id SERIAL PRIMARY KEY,
+      key TEXT UNIQUE NOT NULL,
+      value BIGINT DEFAULT 0,
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
     CREATE TABLE IF NOT EXISTS offer_reports (
       id SERIAL PRIMARY KEY,
       offer_id TEXT NOT NULL,
@@ -1072,6 +1086,109 @@ Return only the JSON array:`
   console.log(`[Auto-update] Crawl complete. Total new offers saved: ${totalSaved}`);
   return totalSaved;
 }
+
+// ─── Offer Verification endpoints ────────────────────────────────────────────
+
+// POST /verify-offer — user votes whether an offer worked
+app.post('/verify-offer', async (req, res) => {
+  const { offer_id, user_id, worked } = req.body;
+  if (!offer_id || !user_id || worked === undefined) {
+    return res.status(400).json({ error: 'offer_id, user_id, and worked are required' });
+  }
+  try {
+    // Upsert — user can change their vote
+    await pool.query(
+      `INSERT INTO offer_verifications (offer_id, user_id, worked)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (offer_id, user_id) DO UPDATE SET worked=$3, created_at=NOW()`,
+      [offer_id, user_id, worked === true || worked === 'true']
+    );
+
+    // Update global savings stat if worked
+    if (worked === true) {
+      await pool.query(
+        `INSERT INTO app_stats (key, value) VALUES ('total_verifications', 1)
+         ON CONFLICT (key) DO UPDATE SET value = app_stats.value + 1, updated_at=NOW()`
+      );
+    }
+
+    // Return updated confidence for this offer
+    const result = await pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE worked = true)  AS worked_count,
+         COUNT(*) FILTER (WHERE worked = false) AS failed_count,
+         COUNT(*) AS total_count
+       FROM offer_verifications WHERE offer_id = $1`,
+      [offer_id]
+    );
+    const { worked_count, failed_count, total_count } = result.rows[0];
+    const confidence = total_count > 0
+      ? Math.round((worked_count / total_count) * 100)
+      : null;
+
+    res.json({
+      success: true,
+      confidence,
+      worked_count: parseInt(worked_count),
+      failed_count: parseInt(failed_count),
+      total_count:  parseInt(total_count),
+    });
+  } catch (e) {
+    console.error('[Verify] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /offer-confidence/:offerId — get confidence score for an offer
+app.get('/offer-confidence/:offerId', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE worked = true)  AS worked_count,
+         COUNT(*) FILTER (WHERE worked = false) AS failed_count,
+         COUNT(*) AS total_count
+       FROM offer_verifications WHERE offer_id = $1`,
+      [req.params.offerId]
+    );
+    const { worked_count, failed_count, total_count } = result.rows[0];
+    const confidence = parseInt(total_count) > 0
+      ? Math.round((parseInt(worked_count) / parseInt(total_count)) * 100)
+      : null;
+
+    res.json({
+      offer_id:     req.params.offerId,
+      confidence,
+      worked_count: parseInt(worked_count),
+      failed_count: parseInt(failed_count),
+      total_count:  parseInt(total_count),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /app-stats — global stats (total savings, total verifications)
+app.get('/app-stats', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT key, value FROM app_stats');
+    const stats = {};
+    result.rows.forEach(r => { stats[r.key] = parseInt(r.value); });
+    res.json(stats);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /app-stats/savings — increment total savings when a saving is logged
+app.post('/app-stats/savings', async (req, res) => {
+  const { amount } = req.body;
+  if (!amount || amount <= 0) return res.json({ success: false });
+  try {
+    await pool.query(
+      `INSERT INTO app_stats (key, value) VALUES ('total_savings', $1)
+       ON CONFLICT (key) DO UPDATE SET value = app_stats.value + $1, updated_at=NOW()`,
+      [Math.round(amount)]
+    );
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ─── Card Features endpoints ─────────────────────────────────────────────────
 // User-facing: fetch features for a specific card using Perplexity + Claude
