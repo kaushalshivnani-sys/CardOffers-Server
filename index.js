@@ -1192,44 +1192,68 @@ app.post('/app-stats/savings', async (req, res) => {
 
 // ─── Card Features endpoints ─────────────────────────────────────────────────
 // User-facing: fetch features for a specific card using Perplexity + Claude
+// Falls back to Claude's own knowledge if Perplexity quota is exceeded
 app.post('/fetch-card-features', async (req, res) => {
   const { bank, variant, card_type } = req.body;
   if (!bank || !variant) return res.status(400).json({ error: 'bank and variant required' });
-
-  const perplexityKey = process.env.PERPLEXITY_API_KEY;
-  if (!perplexityKey) return res.status(500).json({ error: 'Perplexity API not configured' });
 
   try {
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const searchQuery = `${bank} ${variant} credit card all benefits features 2026: lounge access reward points cashback offers insurance dining entertainment fuel India`;
 
-    const perplexityResponse = await fetch('https://api.perplexity.ai/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${perplexityKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'sonar',
-        messages: [
-          { role: 'system', content: 'List all credit card benefits and features in detail.' },
-          { role: 'user', content: searchQuery }
-        ],
-        max_tokens: 1200,
-        temperature: 0.1,
-      })
-    });
+    // ── Step 1: Try Perplexity for fresh web data ─────────────────────────────
+    let searchResult = '';
+    const perplexityKey = process.env.PERPLEXITY_API_KEY;
 
-    if (!perplexityResponse.ok) {
-      const err = await perplexityResponse.text();
-      return res.status(500).json({ error: 'Perplexity error: ' + err.substring(0,100) });
+    if (perplexityKey) {
+      try {
+        const perplexityResponse = await fetch('https://api.perplexity.ai/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${perplexityKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'sonar',
+            messages: [
+              { role: 'system', content: 'List all credit card benefits and features in detail.' },
+              { role: 'user', content: searchQuery }
+            ],
+            max_tokens: 1200,
+            temperature: 0.1,
+          })
+        });
+
+        if (perplexityResponse.ok) {
+          const pData = await perplexityResponse.json();
+          searchResult = pData?.choices?.[0]?.message?.content || '';
+          if (searchResult.length > 0) {
+            console.log(`[CardFeatures] Perplexity: ${searchResult.length} chars for ${bank} ${variant}`);
+          }
+        } else {
+          const errText = await perplexityResponse.text();
+          console.warn(`[CardFeatures] Perplexity unavailable (${perplexityResponse.status}): ${errText.substring(0,80)} — falling back to Claude`);
+        }
+      } catch (perplexityErr) {
+        console.warn('[CardFeatures] Perplexity fetch failed:', perplexityErr.message, '— falling back to Claude');
+      }
     }
 
-    const pData = await perplexityResponse.json();
-    const searchResult = pData?.choices?.[0]?.message?.content || '';
-
+    // ── Step 2: If Perplexity unavailable, use Claude's own knowledge ─────────
+    // Claude has strong knowledge of Indian credit card benefits up to its cutoff
     if (!searchResult || searchResult.length < 50) {
-      return res.json({ features: [] });
+      console.log(`[CardFeatures] Using Claude knowledge fallback for ${bank} ${variant}`);
+      searchResult = `Please provide detailed information about the ${bank} ${variant} credit card in India. Include:
+- Airport lounge access (domestic and international, number of visits per quarter/year)
+- Reward points rate (points per ₹100 spent, categories with higher rates)
+- Cashback offers and rates
+- Insurance covers (travel, air accident, purchase protection)
+- Dining benefits and restaurant offers
+- Fuel surcharge waiver
+- Entertainment benefits (movie tickets, OTT subscriptions)
+- Welcome bonus and annual fee waiver conditions
+- Any other notable features
+Base this on the known features of this card.`;
     }
 
     const aiResponse = await client.messages.create({
