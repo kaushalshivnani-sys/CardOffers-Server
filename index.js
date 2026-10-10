@@ -155,6 +155,18 @@ async function initDB() {
       token TEXT NOT NULL,
       created_at TIMESTAMP DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS api_usage_log (
+      id SERIAL PRIMARY KEY,
+      service TEXT NOT NULL,
+      action TEXT NOT NULL,
+      bank TEXT,
+      variant TEXT,
+      status TEXT NOT NULL,
+      error_msg TEXT,
+      tokens_used INTEGER,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
   `);
 
   // Seed default bank sources if table is empty
@@ -1192,44 +1204,72 @@ app.post('/app-stats/savings', async (req, res) => {
 
 // ─── Card Features endpoints ─────────────────────────────────────────────────
 // User-facing: fetch features for a specific card using Perplexity + Claude
+// Falls back to Claude's own knowledge if Perplexity quota is exceeded
 app.post('/fetch-card-features', async (req, res) => {
   const { bank, variant, card_type } = req.body;
   if (!bank || !variant) return res.status(400).json({ error: 'bank and variant required' });
-
-  const perplexityKey = process.env.PERPLEXITY_API_KEY;
-  if (!perplexityKey) return res.status(500).json({ error: 'Perplexity API not configured' });
 
   try {
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const searchQuery = `${bank} ${variant} credit card all benefits features 2026: lounge access reward points cashback offers insurance dining entertainment fuel India`;
 
-    const perplexityResponse = await fetch('https://api.perplexity.ai/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${perplexityKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'sonar',
-        messages: [
-          { role: 'system', content: 'List all credit card benefits and features in detail.' },
-          { role: 'user', content: searchQuery }
-        ],
-        max_tokens: 1200,
-        temperature: 0.1,
-      })
-    });
+    // ── Step 1: Try Perplexity for fresh web data ─────────────────────────────
+    let searchResult = '';
+    const perplexityKey = process.env.PERPLEXITY_API_KEY;
 
-    if (!perplexityResponse.ok) {
-      const err = await perplexityResponse.text();
-      return res.status(500).json({ error: 'Perplexity error: ' + err.substring(0,100) });
+    if (perplexityKey) {
+      try {
+        const perplexityResponse = await fetch('https://api.perplexity.ai/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${perplexityKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'sonar',
+            messages: [
+              { role: 'system', content: 'List all credit card benefits and features in detail.' },
+              { role: 'user', content: searchQuery }
+            ],
+            max_tokens: 1200,
+            temperature: 0.1,
+          })
+        });
+
+        if (perplexityResponse.ok) {
+          const pData = await perplexityResponse.json();
+          searchResult = pData?.choices?.[0]?.message?.content || '';
+          if (searchResult.length > 0) {
+            console.log(`[CardFeatures] Perplexity: ${searchResult.length} chars for ${bank} ${variant}`);
+            await logApiUsage('perplexity', 'card_features', 'success', { bank, variant });
+          }
+        } else {
+          const errText = await perplexityResponse.text();
+          console.warn(`[CardFeatures] Perplexity unavailable (${perplexityResponse.status}): ${errText.substring(0,80)} — falling back to Claude`);
+          await logApiUsage('perplexity', 'card_features', 'error', { bank, variant, error: `HTTP ${perplexityResponse.status}` });
+        }
+      } catch (perplexityErr) {
+        console.warn('[CardFeatures] Perplexity fetch failed:', perplexityErr.message, '— falling back to Claude');
+        await logApiUsage('perplexity', 'card_features', 'error', { bank, variant, error: perplexityErr.message });
+      }
     }
 
-    const pData = await perplexityResponse.json();
-    const searchResult = pData?.choices?.[0]?.message?.content || '';
-
+    // ── Step 2: If Perplexity unavailable, use Claude's own knowledge ─────────
+    // Claude has strong knowledge of Indian credit card benefits up to its cutoff
     if (!searchResult || searchResult.length < 50) {
-      return res.json({ features: [] });
+      console.log(`[CardFeatures] Using Claude knowledge fallback for ${bank} ${variant}`);
+      await logApiUsage('claude_fallback', 'card_features', 'success', { bank, variant });
+      searchResult = `Please provide detailed information about the ${bank} ${variant} credit card in India. Include:
+- Airport lounge access (domestic and international, number of visits per quarter/year)
+- Reward points rate (points per ₹100 spent, categories with higher rates)
+- Cashback offers and rates
+- Insurance covers (travel, air accident, purchase protection)
+- Dining benefits and restaurant offers
+- Fuel surcharge waiver
+- Entertainment benefits (movie tickets, OTT subscriptions)
+- Welcome bonus and annual fee waiver conditions
+- Any other notable features
+Base this on the known features of this card.`;
     }
 
     const aiResponse = await client.messages.create({
@@ -1572,7 +1612,49 @@ function requireAdminKey(req, res, next) {
 const PORT = process.env.PORT || 3000;
 initDB()
   .then(() => {
-    app.listen(PORT, () => console.log(`CardOffers API running on port ${PORT}`));
+  // ─── Helper: log API usage ──────────────────────────────────────────────────
+async function logApiUsage(service, action, status, opts = {}) {
+  try {
+    await pool.query(
+      `INSERT INTO api_usage_log (service, action, bank, variant, status, error_msg, tokens_used)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [service, action, opts.bank||null, opts.variant||null, status, opts.error||null, opts.tokens||null]
+    );
+  } catch(e) {}
+}
+
+// ─── Admin: API usage stats ──────────────────────────────────────────────────
+app.get('/api-usage-stats', requireAdminKey, async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 7;
+    const summary = await pool.query(`
+      SELECT service, status, COUNT(*) as count
+      FROM api_usage_log
+      WHERE created_at > NOW() - INTERVAL '` + days + ` days'
+      GROUP BY service, status ORDER BY service, status
+    `);
+    const recent = await pool.query(`
+      SELECT service, bank, variant, status, error_msg,
+             TO_CHAR(created_at AT TIME ZONE 'Asia/Kolkata', 'DD Mon HH24:MI') as time_ist
+      FROM api_usage_log WHERE action = 'card_features'
+      ORDER BY created_at DESC LIMIT 20
+    `);
+    const lastFail = await pool.query(`
+      SELECT TO_CHAR(created_at AT TIME ZONE 'Asia/Kolkata', 'DD Mon HH24:MI IST') as time_ist,
+             error_msg FROM api_usage_log
+      WHERE service = 'perplexity' AND status = 'error'
+      ORDER BY created_at DESC LIMIT 1
+    `);
+    res.json({
+      period_days: days,
+      summary: summary.rows,
+      recent_card_features: recent.rows,
+      last_perplexity_failure: lastFail.rows[0] || null,
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+  app.listen(PORT, () => console.log(`CardOffers API running on port ${PORT}`));
 
     // Run cleanup after DB is confirmed ready
     deleteExpiredOffers().catch(err => console.error('[Auto-cleanup] Startup run failed:', err.message));
